@@ -1,9 +1,10 @@
 """
-Macro Risk OS - Data Collector v2.1
+Macro Risk OS - Data Collector v2.2
 Multi-source data collection with validation and fallback.
 
 Sources:
-  - Trading Economics: DI curve (3M-10Y) - CORRECT YIELDS
+  - ANBIMA Feed API: DI curve (ETTJ), NTN-B/NTN-F yields, term structure (PRIMARY)
+  - Trading Economics: DI curve (3M-10Y) - FALLBACK
   - FRED: US Treasury yields, VIX, DXY, NFCI, CPI, breakeven
   - FMP: US Treasury (backup), economic calendar
   - Yahoo Finance: FX, commodities, VIX, DXY, equity indices
@@ -15,6 +16,7 @@ import sys, os, json, time, warnings
 import pandas as pd
 import numpy as np
 import requests
+import base64
 from datetime import datetime, timedelta
 
 warnings.filterwarnings('ignore')
@@ -27,6 +29,15 @@ TE_KEY = "DB5A57F91781451:A8A888DFE5F9495"
 FMP_KEY = "NzfGEUAOUqFjkYP0Q8AD48TapcCZVUEL"
 FRED_KEY = os.environ.get('FRED_API_KEY', 'e63bf4ad4b21136be0b68c27e7e510d9')
 POLYGON_KEY = os.environ.get('POLYGON_API_KEY', '')
+
+# ANBIMA API credentials
+ANBIMA_CLIENT_ID = os.environ.get('ANBIMA_CLIENT_ID', 'qoSZCWnsbfSK')
+ANBIMA_CLIENT_SECRET = os.environ.get('ANBIMA_CLIENT_SECRET', 'xgAbycH1LIb0')
+ANBIMA_AUTH_URL = 'https://api.anbima.com.br/oauth/access-token'
+# Use sandbox for now; switch to production when access is granted
+# Production: https://api.anbima.com.br
+# Sandbox:    https://api-sandbox.anbima.com.br
+ANBIMA_BASE_URL = os.environ.get('ANBIMA_BASE_URL', 'https://api-sandbox.anbima.com.br')
 
 TIMEOUT = 20
 START_DATE = "2010-01-01"
@@ -61,7 +72,276 @@ def load_cached(name):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TRADING ECONOMICS - DI CURVE (PRIMARY for Brazil rates)
+# ANBIMA FEED API - DI CURVE + NTN-B/NTN-F (PRIMARY for Brazil rates)
+# ═══════════════════════════════════════════════════════════════════
+
+_anbima_token_cache = {'token': None, 'expires_at': 0}
+
+
+def _get_anbima_token():
+    """Get ANBIMA OAuth2 access token with caching."""
+    now = time.time()
+    if _anbima_token_cache['token'] and now < _anbima_token_cache['expires_at'] - 60:
+        return _anbima_token_cache['token']
+
+    credentials = f'{ANBIMA_CLIENT_ID}:{ANBIMA_CLIENT_SECRET}'
+    b64 = base64.b64encode(credentials.encode()).decode()
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Basic {b64}'
+    }
+    try:
+        r = requests.post(ANBIMA_AUTH_URL,
+                          json={'grant_type': 'client_credentials'},
+                          headers=headers, timeout=TIMEOUT)
+        r.raise_for_status()
+        data = r.json()
+        token = data['access_token']
+        expires_in = data.get('expires_in', 3600)
+        _anbima_token_cache['token'] = token
+        _anbima_token_cache['expires_at'] = now + expires_in
+        log(f"  [ANBIMA] Token obtained (expires in {expires_in}s)")
+        return token
+    except Exception as e:
+        log(f"  [ANBIMA] Auth failed: {e}")
+        return None
+
+
+def _anbima_headers():
+    """Build ANBIMA API request headers."""
+    token = _get_anbima_token()
+    if not token:
+        return None
+    return {
+        'client_id': ANBIMA_CLIENT_ID,
+        'access_token': token,
+    }
+
+
+def _anbima_get(endpoint, params=None):
+    """Make authenticated GET request to ANBIMA API."""
+    headers = _anbima_headers()
+    if not headers:
+        return None
+    url = f"{ANBIMA_BASE_URL}{endpoint}"
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
+        if r.status_code == 200:
+            return r.json()
+        else:
+            log(f"  [ANBIMA] {endpoint}: HTTP {r.status_code} - {r.text[:200]}")
+            return None
+    except Exception as e:
+        log(f"  [ANBIMA] {endpoint}: {e}")
+        return None
+
+
+def collect_anbima_ettj():
+    """Collect DI curve term structure (ETTJ) from ANBIMA.
+    
+    Returns dict with DI_3M, DI_6M, DI_1Y, DI_2Y, DI_3Y, DI_5Y, DI_10Y
+    and NTNB_5Y, NTNB_10Y from the IPCA curve.
+    
+    Vertex mapping (business days to tenor):
+      21 du  ≈ 1M    63 du  ≈ 3M    126 du ≈ 6M
+      252 du ≈ 1Y    504 du ≈ 2Y    756 du ≈ 3Y
+      1260 du ≈ 5Y   2520 du ≈ 10Y
+    """
+    log("\n[ANBIMA ETTJ - DI Curve Term Structure]")
+    data = _anbima_get('/feed/precos-indices/v1/titulos-publicos/curvas-juros')
+    if not data or not isinstance(data, list) or len(data) == 0:
+        log("  [ANBIMA] No ETTJ data returned")
+        return {}
+
+    rec = data[0]
+    ref_date = rec.get('data_referencia', 'unknown')
+    log(f"  Reference date: {ref_date}")
+
+    ettj = rec.get('ettj', [])
+    if not ettj:
+        log("  [ANBIMA] No ETTJ vertices in response")
+        return {}
+
+    # Map business days to tenor labels
+    du_to_tenor = {
+        63:   'DI_3M',
+        126:  'DI_6M',
+        252:  'DI_1Y',
+        504:  'DI_2Y',
+        756:  'DI_3Y',
+        1260: 'DI_5Y',
+        2520: 'DI_10Y',
+    }
+    # IPCA curve vertices for NTN-B proxy
+    du_to_ntnb = {
+        1260: 'ANBIMA_NTNB_5Y',
+        2520: 'ANBIMA_NTNB_10Y',
+    }
+
+    result = {}
+    ref_dt = pd.Timestamp(ref_date)
+
+    for vertex in ettj:
+        du = vertex.get('vertice_du', 0)
+        pre_rate = vertex.get('taxa_prefixadas')
+        ipca_rate = vertex.get('taxa_ipca')
+
+        # DI prefixed curve
+        if du in du_to_tenor and pre_rate is not None:
+            tenor = du_to_tenor[du]
+            # Create single-point series with reference date
+            s = pd.Series([float(pre_rate)], index=[ref_dt], name=tenor)
+            result[tenor] = s
+            save_series(s, f"ANBIMA_{tenor}")
+            log(f"  {tenor}: {pre_rate:.4f}% (du={du})")
+
+        # IPCA (real) curve for NTN-B proxy
+        if du in du_to_ntnb and ipca_rate is not None:
+            ntnb_key = du_to_ntnb[du]
+            s = pd.Series([float(ipca_rate)], index=[ref_dt], name=ntnb_key)
+            result[ntnb_key] = s
+            save_series(s, ntnb_key)
+            log(f"  {ntnb_key}: {ipca_rate:.4f}% (du={du})")
+
+    # Also extract Nelson-Siegel parameters for the record
+    params = rec.get('parametros', [])
+    for p in params:
+        idx = p.get('grupo_indexador', '')
+        log(f"  NS params ({idx}): b1={p.get('b1','?'):.6f}, b2={p.get('b2','?'):.6f}")
+
+    log(f"  ETTJ: {len(result)} series extracted from {len(ettj)} vertices")
+    return result
+
+
+def collect_anbima_bonds():
+    """Collect NTN-B and NTN-F indicative rates from ANBIMA secondary market.
+    
+    Returns dict with NTNB yields by maturity and NTN-F nominal yields.
+    """
+    log("\n[ANBIMA BONDS - Secondary Market]")
+    data = _anbima_get('/feed/precos-indices/v1/titulos-publicos/mercado-secundario-TPF')
+    if not data or not isinstance(data, list):
+        log("  [ANBIMA] No bond data returned")
+        return {}
+
+    result = {}
+    ntnb_yields = []
+    ntnf_yields = []
+    ref_date = None
+
+    for bond in data:
+        tipo = str(bond.get('tipo_titulo', ''))
+        rate = bond.get('taxa_indicativa')
+        mat_date = bond.get('data_vencimento')
+        if not ref_date:
+            ref_date = bond.get('data_referencia', bond.get('data_base'))
+
+        if rate is None or mat_date is None:
+            continue
+
+        mat_dt = pd.Timestamp(mat_date)
+        ref_dt = pd.Timestamp(ref_date) if ref_date else pd.Timestamp.now()
+        years_to_mat = (mat_dt - ref_dt).days / 365.25
+
+        if 'NTN-B' in tipo and 'Principal' not in tipo:
+            ntnb_yields.append({
+                'maturity': mat_date,
+                'years': years_to_mat,
+                'rate': float(rate),
+                'tipo': tipo,
+            })
+        elif 'NTN-F' in tipo:
+            ntnf_yields.append({
+                'maturity': mat_date,
+                'years': years_to_mat,
+                'rate': float(rate),
+                'tipo': tipo,
+            })
+
+    # Find NTN-B closest to 5Y and 10Y
+    ref_dt = pd.Timestamp(ref_date) if ref_date else pd.Timestamp.now()
+    for target_years, key in [(5, 'ANBIMA_NTNB_BOND_5Y'), (10, 'ANBIMA_NTNB_BOND_10Y')]:
+        closest = None
+        min_diff = float('inf')
+        for b in ntnb_yields:
+            diff = abs(b['years'] - target_years)
+            if diff < min_diff:
+                min_diff = diff
+                closest = b
+        if closest and min_diff < 2.0:  # Within 2 years tolerance
+            s = pd.Series([closest['rate']], index=[ref_dt], name=key)
+            result[key] = s
+            save_series(s, key)
+            log(f"  {key}: {closest['rate']:.4f}% (mat={closest['maturity']}, {closest['years']:.1f}Y)")
+
+    # Find NTN-F closest to 5Y and 10Y for DI validation
+    for target_years, key in [(5, 'ANBIMA_NTNF_5Y'), (10, 'ANBIMA_NTNF_10Y')]:
+        closest = None
+        min_diff = float('inf')
+        for b in ntnf_yields:
+            diff = abs(b['years'] - target_years)
+            if diff < min_diff:
+                min_diff = diff
+                closest = b
+        if closest and min_diff < 2.0:
+            s = pd.Series([closest['rate']], index=[ref_dt], name=key)
+            result[key] = s
+            save_series(s, key)
+            log(f"  {key}: {closest['rate']:.4f}% (mat={closest['maturity']}, {closest['years']:.1f}Y)")
+
+    # Store all NTN-B yields as a curve
+    if ntnb_yields:
+        ntnb_sorted = sorted(ntnb_yields, key=lambda x: x['years'])
+        log(f"  NTN-B curve ({len(ntnb_sorted)} bonds):")
+        for b in ntnb_sorted:
+            log(f"    mat={b['maturity']} ({b['years']:.1f}Y): {b['rate']:.4f}%")
+
+    # Compute breakeven inflation from NTN-F vs NTN-B
+    for target_years, be_key in [(5, 'ANBIMA_BREAKEVEN_5Y'), (10, 'ANBIMA_BREAKEVEN_10Y')]:
+        ntnf_key = f'ANBIMA_NTNF_{target_years}Y'
+        ntnb_key = f'ANBIMA_NTNB_BOND_{target_years}Y'
+        if ntnf_key in result and ntnb_key in result:
+            ntnf_rate = float(result[ntnf_key].iloc[0])
+            ntnb_rate = float(result[ntnb_key].iloc[0])
+            # Fisher equation: (1+nominal)/(1+real) - 1 ≈ nominal - real for small rates
+            breakeven = ntnf_rate - ntnb_rate
+            s = pd.Series([breakeven], index=[ref_dt], name=be_key)
+            result[be_key] = s
+            save_series(s, be_key)
+            log(f"  {be_key}: {breakeven:.4f}% (NTN-F {ntnf_rate:.2f}% - NTN-B {ntnb_rate:.2f}%)")
+
+    log(f"  Bonds: {len(result)} series extracted")
+    return result
+
+
+def collect_anbima():
+    """Collect all ANBIMA data (ETTJ + bonds)."""
+    log("\n" + "=" * 60)
+    log("[ANBIMA FEED API - Primary Source for BR Rates]")
+    log("=" * 60)
+    result = {}
+    try:
+        ettj = collect_anbima_ettj()
+        result.update(ettj)
+    except Exception as e:
+        log(f"  [ANBIMA] ETTJ collection failed: {e}")
+
+    try:
+        bonds = collect_anbima_bonds()
+        result.update(bonds)
+    except Exception as e:
+        log(f"  [ANBIMA] Bond collection failed: {e}")
+
+    if result:
+        log(f"  [ANBIMA] Total: {len(result)} series collected")
+    else:
+        log("  [ANBIMA] No data collected - will fall back to Trading Economics")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TRADING ECONOMICS - DI CURVE (FALLBACK for Brazil rates)
 # ═══════════════════════════════════════════════════════════════════
 
 def fetch_te_historical(symbol, start=START_DATE, end=None):
@@ -612,7 +892,32 @@ def merge_sources(all_data):
             save_series(all_data['CDS_5Y'], 'CDS_5Y')
             log(f"  CDS_5Y: using EMBI*0.7 proxy, last={all_data['CDS_5Y'].iloc[-1]:.0f} bps")
     
-    # Construct DI curve from SELIC + term premium
+    # ANBIMA → Trading Economics → SELIC construction priority for DI curve
+    # Use ANBIMA ETTJ as primary source for DI curve if available
+    for tenor in ['DI_3M', 'DI_6M', 'DI_1Y', 'DI_2Y', 'DI_3Y', 'DI_5Y', 'DI_10Y']:
+        anbima_key = tenor  # ANBIMA data stored with same key prefix
+        if anbima_key in all_data and not all_data[anbima_key].empty:
+            log(f"  {tenor}: using ANBIMA ETTJ ({all_data[anbima_key].iloc[-1]:.2f}%)")
+        # If ANBIMA not available but TE is, TE was already loaded
+        elif tenor in all_data and not all_data[tenor].empty:
+            log(f"  {tenor}: using Trading Economics ({all_data[tenor].iloc[-1]:.2f}%)")
+
+    # Use ANBIMA NTN-B bond yields as primary for real yields
+    for target, anbima_key in [('NTNB_5Y', 'ANBIMA_NTNB_BOND_5Y'), ('NTNB_10Y', 'ANBIMA_NTNB_BOND_10Y')]:
+        if anbima_key in all_data and not all_data[anbima_key].empty:
+            # Also store under standard key for macro_risk_os.py
+            all_data[target] = all_data[anbima_key]
+            save_series(all_data[target], target)
+            log(f"  {target}: using ANBIMA bond yield ({all_data[target].iloc[-1]:.2f}%)")
+
+    # Use ANBIMA breakeven if available
+    for target, anbima_key in [('BREAKEVEN_5Y', 'ANBIMA_BREAKEVEN_5Y'), ('BREAKEVEN_10Y', 'ANBIMA_BREAKEVEN_10Y')]:
+        if anbima_key in all_data and not all_data[anbima_key].empty:
+            all_data[target] = all_data[anbima_key]
+            save_series(all_data[target], target)
+            log(f"  {target}: using ANBIMA breakeven ({all_data[target].iloc[-1]:.2f}%)")
+
+    # Construct DI curve from SELIC + term premium (last resort)
     all_data = _construct_di_curve(all_data)
 
     # DXY: prefer Yahoo (actual DXY), FRED is trade-weighted
@@ -665,13 +970,26 @@ def merge_sources(all_data):
 def collect_all():
     """Run the full data collection pipeline."""
     log("=" * 60)
-    log("Macro Risk OS Data Collector v2.1")
+    log("Macro Risk OS Data Collector v2.2")
     log("=" * 60)
 
     all_data = {}
+    anbima_data = {}  # Store ANBIMA separately to preserve as primary
 
-    # 1. DI Curve from Trading Economics (PRIORITY - fixes 5Y/10Y)
-    all_data.update(collect_di_curve())
+    # 0. ANBIMA Feed API (PRIMARY for BR rates - ETTJ + NTN-B/NTN-F)
+    anbima_data = collect_anbima()
+    all_data.update(anbima_data)
+
+    # 1. DI Curve from Trading Economics (FALLBACK for BR rates)
+    # Only update keys that ANBIMA didn't provide
+    te_data = collect_di_curve()
+    for key, val in te_data.items():
+        if key not in anbima_data:
+            all_data[key] = val
+        else:
+            # Keep TE data under a separate key for reference/history
+            all_data[f'TE_{key}'] = val
+            log(f"  {key}: ANBIMA primary, TE stored as TE_{key}")
 
     # 2. FRED (US rates, VIX, DXY, FCI, CPI)
     all_data.update(collect_fred())
@@ -691,7 +1009,7 @@ def collect_all():
     # 7. Structural (PPP, REER)
     all_data.update(collect_structural())
 
-    # 8. Merge best sources
+    # 8. Merge best sources (ANBIMA > TE > SELIC construction)
     all_data = merge_sources(all_data)
 
     # 9. Validate

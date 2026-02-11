@@ -54,13 +54,14 @@ All variables are standardized with **rolling 5-year Z-scores** and **winsorized
 
 ## Data Sources
 
-| Source | Series |
-|--------|--------|
-| **Trading Economics** | DI curve (3M, 6M, 1Y, 2Y, 3Y, 5Y, 10Y) |
-| **FRED** | UST yields (2Y, 5Y, 10Y), VIX, DXY, NFCI, CPI, Breakevens (T5YIE, T10YIE), HY Spread |
-| **BCB** | IPCA, SELIC, PTAX, Dívida Bruta/PIB, Resultado Primário, FX Forwards |
-| **IPEADATA** | EMBI+ Risco Brasil, SELIC Over |
-| **Yahoo Finance** | USDBRL, Commodities (CRB), VIX, DXY |
+| Source | Series | Priority |
+|--------|--------|----------|
+| **ANBIMA Feed API** | DI curve ETTJ (3M-10Y, 75 vertices), NTN-B yields (real), NTN-F yields (nominal), Breakeven inflation | **PRIMARY** |
+| **Trading Economics** | DI curve (3M, 6M, 1Y, 2Y, 3Y, 5Y, 10Y) | Fallback |
+| **FRED** | UST yields (2Y, 5Y, 10Y), VIX, DXY, NFCI, CPI, Breakevens (T5YIE, T10YIE), HY Spread | Primary (US) |
+| **BCB** | IPCA, SELIC, PTAX, Dívida Bruta/PIB, Resultado Primário, FX Forwards | Primary (BR macro) |
+| **IPEADATA** | EMBI+ Risco Brasil, SELIC Over | Supplementary |
+| **Yahoo Finance** | USDBRL, Commodities (CRB), VIX, DXY | Fallback |
 
 ## Tech Stack
 
@@ -90,6 +91,10 @@ pnpm db:push
 # Install Python dependencies
 pip install pandas numpy statsmodels yfinance requests fredapi
 
+# Configure ANBIMA API (optional - falls back to Trading Economics)
+# Register at https://developers.anbima.com.br
+# For production access, email anbimafeed@anbima.com.br with your client_id
+
 # Development
 pnpm dev
 
@@ -103,6 +108,9 @@ pnpm build && pnpm start
 DATABASE_URL=mysql://user:pass@host:port/db?ssl={"rejectUnauthorized":true}
 JWT_SECRET=your-jwt-secret
 FRED_API_KEY=your-fred-api-key  # Free at https://fred.stlouisfed.org/docs/api/api_key.html
+ANBIMA_CLIENT_ID=your-client-id  # Register at https://developers.anbima.com.br
+ANBIMA_CLIENT_SECRET=your-client-secret
+ANBIMA_BASE_URL=https://api-sandbox.anbima.com.br  # Switch to api.anbima.com.br for production
 ```
 
 ## API Endpoints (tRPC)
@@ -132,7 +140,7 @@ client/src/
 
 server/
   model/
-    data_collector.py      # Multi-source data collection (TE, FRED, BCB, Yahoo)
+    data_collector.py      # Multi-source data collection (ANBIMA, TE, FRED, BCB, Yahoo)
     macro_risk_os.py       # Full Macro Risk OS engine (8 blocks)
     run_model.py           # Entry point for model execution
   modelRunner.ts           # Python execution bridge (child_process)

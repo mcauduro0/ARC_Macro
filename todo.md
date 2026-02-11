@@ -100,4 +100,31 @@
 - [x] Update macro_risk_os.py with corrected data
 - [x] Re-run model with corrected data
 - [x] Update dashboard with stress test visualization
+- [x] Push to GitHub (3 commits: v2.0, v2.1 data fix, docs)
+
+## ANBIMA API Integration (v2.2)
+
+### Research & Authentication
+- [x] Analyze ANBIMA API documentation (endpoints, auth, rate limits)
+- [x] Configure ANBIMA API credentials (client_id: qoSZCWnsbfSK, client_secret: xgAbycH1LIb0)
+- [x] Test authentication flow (OAuth2)
+
+### Data Collection
+- [x] Implement ANBIMA ETTJ (curvas-juros) endpoint for DI curve vertices (7 tenors)
+- [x] Integrate NTN-B yields (real yields for 5Y, 10Y maturities) from mercado-secundario-TPF
+- [x] Integrate NTN-F yields (nominal yields for DI curve validation)
+- [x] Calculate breakeven inflation from NTN-F vs NTN-B spread (5Y: 4.75%, 10Y: 5.05%)
+- [x] Integrate DI curve from ANBIMA ETTJ (3M to 10Y, 75 vertices)
+- [x] Add ANBIMA as primary source in collect_all() pipeline
+- [x] Update merge_sources() to prioritize ANBIMA > TE > SELIC construction
+- [x] Test end-to-end ANBIMA data collection (15 series extracted)
+
+### Model Update
+- [x] Update data_collector.py v2.2 with ANBIMA source
+- [x] Validate ANBIMA data vs current Trading Economics data
+- [ ] Re-run model with ANBIMA data
+
+### Delivery
+- [ ] Run tests
+- [ ] Save checkpoint
 - [ ] Push to GitHub
