@@ -74,3 +74,30 @@
 - [x] Factor exposure heatmap
 - [x] Regime-adjusted positions panel
 - [x] Stress test results display
+
+## Data Fix & Stress Tests (v2.1)
+
+### Data Collection Fix
+- [x] Fix DI 5Y/10Y data (currently showing 1.70%/0.91% instead of ~14-15%)
+- [x] Rewrite data_collector.py with correct sources for all series
+- [x] Use Trading Economics for DI curve (3M, 6M, 1Y, 2Y, 3Y, 5Y, 10Y) in % a.a.
+- [x] Use FRED for breakeven inflation (T5YIE, T10YIE)
+- [x] Use FRED for US Treasury yields (2Y, 5Y, 10Y)
+- [x] Use EMBI proxy for CDS 5Y Brazil (EMBI*0.7)
+- [x] Use FRED/Yahoo Finance for VIX
+- [x] Use FRED for Financial Conditions Index (NFCI)
+- [x] Use BCB for FX forwards and cupom cambial
+- [x] Validate all data scales (yields in %, spreads in bps)
+- [x] Test full data collection pipeline
+
+### Stress Test Visualization
+- [x] Define 4 historical stress scenarios (Taper 2013, Fiscal BR 2015, Covid 2020, Inflation 2022)
+- [x] Calculate portfolio impact for each scenario with per-asset breakdown
+- [x] Add StressTestPanel component to dashboard
+- [x] Add stress test charts with scenario comparison (horizontal bar + per-asset stacked)
+
+### Integration
+- [x] Update macro_risk_os.py with corrected data
+- [x] Re-run model with corrected data
+- [x] Update dashboard with stress test visualization
+- [ ] Push to GitHub

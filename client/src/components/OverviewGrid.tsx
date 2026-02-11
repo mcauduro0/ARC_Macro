@@ -275,7 +275,9 @@ export function OverviewGrid({ dashboard: d }: Props) {
                 }
               />
               {/* Regime probabilities */}
-              {d.regime_probabilities && Object.entries(d.regime_probabilities).map(([regime, prob]) => {
+              {d.regime_probabilities && Object.entries(d.regime_probabilities)
+                .filter(([key]) => key.startsWith('P_'))
+                .map(([regime, prob]) => {
                 const p = prob as number;
                 const regimeColors: Record<string, string> = {
                   'P_Carry': 'bg-emerald-400',

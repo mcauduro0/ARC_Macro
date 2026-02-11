@@ -104,13 +104,17 @@ class DataLoader:
         log("=" * 60)
         
         # --- market_fx ---
-        brlusd = load_series('BRLUSD_YF')
+        brlusd = load_series('USDBRL')
         if len(brlusd) == 0:
-            brlusd = load_series('PTAX_SELL')
+            brlusd = load_series('BRLUSD_YF')
+        if len(brlusd) == 0:
+            brlusd = load_series('PTAX')
         self.data['spot_brlusd'] = to_monthly(brlusd)
         self.data['spot_brlusd_daily'] = brlusd
         
         dxy = load_series('DXY_YF')
+        if len(dxy) == 0:
+            dxy = load_series('DXY')
         if len(dxy) == 0:
             dxy = load_series('DXY_FRED')
         self.data['dxy'] = to_monthly(dxy)
@@ -130,39 +134,48 @@ class DataLoader:
         self.data['fx_vol_1m'] = to_monthly(fx_vol) if len(fx_vol) > 0 else pd.Series(dtype=float)
         
         # --- market_rates_local (yields in % a.a.) ---
-        # DI yield curve
-        di_1y = load_series('DI_YIELD_1Y')  # BCB 4189 (% a.a.)
+        # DI yield curve from Trading Economics (CORRECT YIELDS)
+        di_1y = load_series('DI_1Y')  # Trading Economics GEBR1Y:IND
         if len(di_1y) == 0:
-            di_1y = load_series('DI_SWAP_360D')  # Fallback
+            di_1y = load_series('DI_YIELD_1Y')  # BCB 4189 fallback
+        if len(di_1y) == 0:
+            di_1y = load_series('SELIC_OVER')  # Last resort
         self.data['di_1y'] = di_1y
         
-        di_2y = load_series('DI_YIELD_2Y_IPEA')
+        di_2y = load_series('DI_2Y')  # Trading Economics GEBR2Y:IND
         if len(di_2y) == 0:
-            di_2y = load_series('DI_SWAP_720D')  # Fallback
+            di_2y = load_series('DI_YIELD_2Y_IPEA')
         self.data['di_2y'] = di_2y
         
-        di_3y = load_series('DI_YIELD_3Y_IPEA')
+        di_3y = load_series('DI_3Y')  # Trading Economics GEBR3Y:IND
         self.data['di_3y'] = di_3y
         
-        di_5y = load_series('DI_YIELD_5Y_IPEA')
+        di_5y = load_series('DI_5Y')  # Trading Economics GEBR5Y:IND
         if len(di_5y) == 0:
-            di_5y = load_series('DI_SWAP_1800D')  # Fallback
+            di_5y = load_series('DI_YIELD_5Y_IPEA')
         self.data['di_5y'] = di_5y
         
-        # For 10Y, use 5Y as proxy if not available
-        di_10y = load_series('DI_SWAP_3600D')
-        self.data['di_10y'] = di_10y if len(di_10y) > 0 else di_5y
+        di_10y = load_series('DI_10Y')  # Trading Economics GEBR10Y:IND
+        if len(di_10y) == 0:
+            di_10y = di_5y  # Fallback to 5Y if 10Y unavailable
+        self.data['di_10y'] = di_10y
         
         # NTN-B real yields
         ntnb_5y = load_series('NTNB_YIELD_5Y_IPEA')
         if len(ntnb_5y) == 0:
-            ntnb_5y = load_series('NTNB_5Y')  # Fallback (may be PU)
+            ntnb_5y = load_series('NTNB_5Y')
         self.data['ntnb_5y'] = ntnb_5y
         
         ntnb_10y = load_series('NTNB_YIELD_10Y_IPEA')
         if len(ntnb_10y) == 0:
-            ntnb_10y = load_series('NTNB_10Y')  # Fallback (may be PU)
+            ntnb_10y = load_series('NTNB_10Y')
         self.data['ntnb_10y'] = ntnb_10y
+        
+        # DI short tenors
+        di_3m = load_series('DI_3M')  # Trading Economics GEBR3M:IND
+        self.data['di_3m'] = di_3m
+        di_6m = load_series('DI_6M')  # Trading Economics GEBR6M:IND
+        self.data['di_6m'] = di_6m
         
         # SELIC
         selic = load_series('SELIC_META')
@@ -175,20 +188,28 @@ class DataLoader:
         self.data['ust_5y'] = load_series('UST_5Y')
         self.data['ust_10y'] = load_series('UST_10Y')
         self.data['ust_30y'] = load_series('UST_30Y')
-        self.data['fed_funds'] = load_series('FED_FUNDS_EFFECTIVE')
+        fed = load_series('FED_FUNDS')
+        if len(fed) == 0:
+            fed = load_series('FED_FUNDS_EFFECTIVE')
+        self.data['fed_funds'] = fed
         self.data['us_tips_5y'] = load_series('US_TIPS_5Y')
         self.data['us_tips_10y'] = load_series('US_TIPS_10Y')
         
         # --- market_credit ---
-        embi = load_series('EMBI_PLUS')
+        embi = load_series('EMBI_SPREAD')
+        if len(embi) == 0:
+            embi = load_series('EMBI_PLUS')
         if len(embi) == 0:
             embi = load_series('EMBI_PLUS_IPEA')
         if len(embi) == 0:
-            embi = load_series('EMBI_SPREAD')  # Legacy fallback
-            if len(embi) == 0:
-                embi = load_series('EMBI_PLUS_RISCO')  # Legacy BCB
+            embi = load_series('EMBI_PLUS_RISCO')
         self.data['embi_spread'] = embi
-        self.data['cds_5y'] = load_series('CDS_5Y_BRAZIL')
+        cds = load_series('CDS_5Y')
+        if len(cds) == 0:
+            cds = load_series('CDS_5Y_BCB')
+        if len(cds) == 0:
+            cds = load_series('CDS_5Y_BRAZIL')
+        self.data['cds_5y'] = cds
         
         # --- macro_local ---
         self.data['ipca_monthly'] = load_series('IPCA_MONTHLY')
@@ -196,7 +217,10 @@ class DataLoader:
         if len(self.data['ipca_exp_12m']) == 0:
             self.data['ipca_exp_12m'] = load_series('IPCA_EXP_FOCUS')
         self.data['debt_gdp'] = load_series('DIVIDA_BRUTA_PIB')
-        self.data['current_account'] = load_series('BOP_CURRENT_ACCOUNT')
+        ca = load_series('BOP_CURRENT')
+        if len(ca) == 0:
+            ca = load_series('BOP_CURRENT_ACCOUNT')
+        self.data['current_account'] = ca
         self.data['terms_of_trade'] = load_series('TERMS_OF_TRADE')
         self.data['comm_idx'] = load_series('BRAZIL_COMM_IDX')
         self.data['primary_balance'] = load_series('PRIMARY_BALANCE')
@@ -205,14 +229,26 @@ class DataLoader:
         # --- macro_global ---
         self.data['cpi_us'] = load_series('CPI_US')
         self.data['us_breakeven_10y'] = load_series('US_BREAKEVEN_10Y')
-        self.data['vix'] = load_series('VIX')
+        vix = load_series('VIX')
+        if len(vix) == 0:
+            vix = load_series('VIX_YF')
+        self.data['vix'] = vix
         self.data['nfci'] = load_series('NFCI')
-        self.data['fci'] = load_series('FCI_STLFSI')
-        self.data['us_cpi_exp'] = load_series('US_CPI_EXP_MICHIGAN')
+        fci = load_series('FCI_STLFSI')
+        if len(fci) == 0:
+            fci = load_series('NFCI')
+        self.data['fci'] = fci
+        us_exp = load_series('US_CPI_EXP')
+        if len(us_exp) == 0:
+            us_exp = load_series('US_CPI_EXP_MICHIGAN')
+        self.data['us_cpi_exp'] = us_exp
         
         # --- structural ---
         self.data['ppp_factor'] = load_series('PPP_FACTOR')
-        self.data['reer'] = load_series('REER_BIS')
+        reer = load_series('REER_BIS')
+        if len(reer) == 0:
+            reer = load_series('REER')
+        self.data['reer'] = reer
         
         # Convert all to monthly where needed
         for key in list(self.data.keys()):
@@ -1136,7 +1172,8 @@ class SizingEngine:
             }
             
             direction = "LONG" if w > 0.05 else ("SHORT" if w < -0.05 else "NEUTRAL")
-            log(f"\n  {asset.upper()}: {direction} (w={w:.3f}, E[r_6m]={er_6m*100:.2f}% if er_6m else 'N/A', Sharpe={sharpe:.3f})")
+            er_6m_str = f"{er_6m*100:.2f}%" if er_6m is not None else 'N/A'
+            log(f"\n  {asset.upper()}: {direction} (w={w:.3f}, E[r_6m]={er_6m_str}, Sharpe={sharpe:.3f})")
         
         return self.positions
     
@@ -1253,16 +1290,16 @@ class RiskAggregation:
             # Rolling 2Y covariance
             cov_matrix = returns.iloc[-24:].cov()
             
-            # Portfolio vol
+            # Portfolio vol - align weights with available columns
+            asset_order = ['fx', 'front', 'long', 'hard']
+            available = [a for a in asset_order if a in cov_matrix.columns]
             weights = np.array([
-                self.positions.get('fx', {}).get('weight', 0),
-                self.positions.get('front', {}).get('weight', 0),
-                self.positions.get('long', {}).get('weight', 0),
-                self.positions.get('hard', {}).get('weight', 0),
+                self.positions.get(a, {}).get('weight', 0) for a in available
             ])
+            cov_sub = cov_matrix.loc[available, available].values
             
-            port_var = weights @ cov_matrix.values @ weights
-            port_vol = np.sqrt(port_var) * np.sqrt(12)  # Annualize from monthly
+            port_var = weights @ cov_sub @ weights
+            port_vol = np.sqrt(max(port_var, 0)) * np.sqrt(12)  # Annualize from monthly
             
             self.risk_metrics['portfolio_vol'] = round(float(port_vol), 4)
             self.risk_metrics['correlation_matrix'] = returns.iloc[-24:].corr().round(3).to_dict()
@@ -1334,6 +1371,13 @@ class RiskAggregation:
                 try:
                     period = returns.loc[start:end]
                     if len(period) > 0:
+                        # Per-asset returns during stress
+                        asset_returns = {}
+                        for asset in ['fx', 'front', 'long', 'hard']:
+                            if asset in period.columns:
+                                asset_ret = float(period[asset].sum())
+                                asset_returns[asset] = round(asset_ret * 100, 2)
+                        
                         # Portfolio return during stress
                         port_ret = sum(
                             period.get(asset, pd.Series(0, index=period.index)).sum() * w
@@ -1356,10 +1400,41 @@ class RiskAggregation:
                             'total_return': round(float(port_ret) * 100, 2),
                             'max_drawdown': round(float(max_dd) * 100, 2),
                             'months': len(period),
+                            'asset_returns': asset_returns,
+                            'start': start,
+                            'end': end,
                         }
                         log(f"    {scenario_name}: return={port_ret*100:.2f}%, max_dd={max_dd*100:.2f}%")
+                        for a, r in asset_returns.items():
+                            log(f"      {a}: {r:.2f}%")
                 except Exception as e:
                     log(f"    {scenario_name}: FAILED ({e})")
+        
+        # Add current drawdown from peak
+        if returns is not None and len(returns) > 0:
+            try:
+                weights_arr = {
+                    'fx': self.positions.get('fx', {}).get('weight', 0),
+                    'front': self.positions.get('front', {}).get('weight', 0),
+                    'long': self.positions.get('long', {}).get('weight', 0),
+                    'hard': self.positions.get('hard', {}).get('weight', 0),
+                }
+                port_cum = sum(
+                    returns.get(a, pd.Series(0, index=returns.index)).cumsum() * w
+                    for a, w in weights_arr.items()
+                    if a in returns.columns
+                )
+                if hasattr(port_cum, 'max'):
+                    peak = port_cum.cummax()
+                    dd = port_cum - peak
+                    current_dd = float(dd.iloc[-1])
+                    max_dd_hist = float(dd.min())
+                    self.risk_metrics['current_drawdown'] = round(current_dd * 100, 2)
+                    self.risk_metrics['max_drawdown_historical'] = round(max_dd_hist * 100, 2)
+                    log(f"\n  Current drawdown: {current_dd*100:.2f}%")
+                    log(f"  Max historical drawdown: {max_dd_hist*100:.2f}%")
+            except Exception as e:
+                log(f"  Drawdown calc failed: {e}")
         
         self.risk_metrics['stress_tests'] = stress_results
 
@@ -1490,12 +1565,18 @@ def _build_dashboard(data, states, z_states, models, expected_returns,
         'selic_target': round(float(data.get('selic_target', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('selic_target', pd.Series(dtype=float))) > 0 else None,
         'di_1y': round(float(data.get('di_1y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('di_1y', pd.Series(dtype=float))) > 0 else None,
         'di_5y': round(float(data.get('di_5y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('di_5y', pd.Series(dtype=float))) > 0 else None,
+        'di_3m': round(float(data.get('di_3m', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('di_3m', pd.Series(dtype=float))) > 0 else None,
+        'di_6m': round(float(data.get('di_6m', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('di_6m', pd.Series(dtype=float))) > 0 else None,
         'di_10y': round(float(data.get('di_10y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('di_10y', pd.Series(dtype=float))) > 0 else None,
         'ntnb_5y': round(float(data.get('ntnb_5y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('ntnb_5y', pd.Series(dtype=float))) > 0 else None,
         'ntnb_10y': round(float(data.get('ntnb_10y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('ntnb_10y', pd.Series(dtype=float))) > 0 else None,
+        'breakeven_5y': round(float(data.get('breakeven_5y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('breakeven_5y', pd.Series(dtype=float))) > 0 else None,
+        'breakeven_10y': round(float(data.get('breakeven_10y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('breakeven_10y', pd.Series(dtype=float))) > 0 else None,
         'ust_2y': round(float(data.get('ust_2y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('ust_2y', pd.Series(dtype=float))) > 0 else None,
+        'ust_5y': round(float(data.get('ust_5y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('ust_5y', pd.Series(dtype=float))) > 0 else None,
         'ust_10y': round(float(data.get('ust_10y', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('ust_10y', pd.Series(dtype=float))) > 0 else None,
         'embi_spread': round(float(data.get('embi_spread', pd.Series(dtype=float)).iloc[-1]), 0) if len(data.get('embi_spread', pd.Series(dtype=float))) > 0 else None,
+        'cds_5y': round(float(data.get('cds_5y', pd.Series(dtype=float)).iloc[-1]), 0) if len(data.get('cds_5y', pd.Series(dtype=float))) > 0 else None,
         'vix': round(float(data.get('vix', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('vix', pd.Series(dtype=float))) > 0 else None,
         'dxy': round(float(data.get('dxy', pd.Series(dtype=float)).iloc[-1]), 2) if len(data.get('dxy', pd.Series(dtype=float))) > 0 else None,
         

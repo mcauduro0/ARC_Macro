@@ -26,11 +26,40 @@ export const appRouter = router({
       const run = await getLatestModelRun();
 
       if (run) {
+        // Normalize dashboard data
+        const dash = run.dashboardJson as Record<string, unknown>;
+
+        // Normalize stress_tests: Python outputs dict {"2013_Taper": {...}} → convert to array
+        const riskMetrics = dash?.risk_metrics as Record<string, unknown> | undefined;
+        if (riskMetrics?.stress_tests && !Array.isArray(riskMetrics.stress_tests)) {
+          const stDict = riskMetrics.stress_tests as Record<string, Record<string, unknown>>;
+          riskMetrics.stress_tests = Object.entries(stDict).map(([key, val]) => ({
+            name: key.replace(/_/g, ' ').replace(/^(\d{4})\s/, '$1 '),
+            return_pct: (val.total_return as number) || 0,
+            max_dd_pct: (val.max_drawdown as number) || 0,
+            per_asset: val.asset_returns || {},
+            start: val.start,
+            end: val.end,
+            months: val.months,
+          }));
+        }
+
+        // Normalize regime_probabilities: Python outputs {"P_Carry": 0.76, ...} → keep as-is but ensure consistent keys
+        const regimeProbs = dash?.regime_probabilities as Record<string, number> | undefined;
+        if (regimeProbs) {
+          // Ensure frontend-friendly keys
+          if (regimeProbs.P_Carry !== undefined && regimeProbs.carry === undefined) {
+            (regimeProbs as any).carry = regimeProbs.P_Carry;
+            (regimeProbs as any).riskoff = regimeProbs.P_RiskOff || 0;
+            (regimeProbs as any).stress_dom = regimeProbs.P_StressDom || 0;
+          }
+        }
+
         return {
           source: "database" as const,
           runDate: run.runDate,
           updatedAt: run.createdAt,
-          dashboard: run.dashboardJson,
+          dashboard: dash,
           timeseries: run.timeseriesJson,
           regime: run.regimeJson,
           cyclical: run.cyclicalJson,

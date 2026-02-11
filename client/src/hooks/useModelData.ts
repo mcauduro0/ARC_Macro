@@ -30,6 +30,7 @@ export interface StressTest {
   name: string;
   return_pct: number;
   max_dd_pct: number;
+  per_asset?: Record<string, number>;
 }
 
 /** Full Macro Risk OS Dashboard */
@@ -92,6 +93,8 @@ export interface MacroDashboard {
     correlation_matrix: Record<string, Record<string, number>>;
     stress_tests: StressTest[];
     max_drawdown: number;
+    current_drawdown?: number;
+    max_drawdown_historical?: number;
   };
   
   // Legacy FX-only fields (backward compat)
