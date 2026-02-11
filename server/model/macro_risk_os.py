@@ -1162,7 +1162,10 @@ class SizingEngine:
             ru = risk_units.get(asset, 0)
             sharpe = sharpes.get(asset, 0)
             
+            direction = "LONG" if w > 0.05 else ("SHORT" if w < -0.05 else "NEUTRAL")
+            
             self.positions[asset] = {
+                'direction': direction,
                 'weight': round(float(w), 4),
                 'expected_return_3m': round(float(er_3m * 100), 2) if er_3m else None,
                 'expected_return_6m': round(float(er_6m * 100), 2) if er_6m else None,
@@ -1170,8 +1173,6 @@ class SizingEngine:
                 'risk_unit': round(float(ru), 4),
                 'risk_contribution': round(float(abs(w) * ru), 4),
             }
-            
-            direction = "LONG" if w > 0.05 else ("SHORT" if w < -0.05 else "NEUTRAL")
             er_6m_str = f"{er_6m*100:.2f}%" if er_6m is not None else 'N/A'
             log(f"\n  {asset.upper()}: {direction} (w={w:.3f}, E[r_6m]={er_6m_str}, Sharpe={sharpe:.3f})")
         

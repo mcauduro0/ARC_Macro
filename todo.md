@@ -122,9 +122,16 @@
 ### Model Update
 - [x] Update data_collector.py v2.2 with ANBIMA source
 - [x] Validate ANBIMA data vs current Trading Economics data
-- [ ] Re-run model with ANBIMA data
+- [x] Re-run model with ANBIMA data (validated end-to-end)
 
 ### Delivery
-- [ ] Run tests
-- [ ] Save checkpoint
-- [ ] Push to GitHub
+- [x] Run tests (ANBIMA collection validated)
+- [x] Save checkpoint (d23dd013)
+- [x] Push to GitHub (commit 58eb267)
+
+## Bug Fix: N/A Signals on Dashboard Cards
+- [x] Investigate why Front-End, Long-End, Hard Currency cards show "N/A" instead of BUY/SELL/NEUTRAL
+  Root cause: positions dict in macro_risk_os.py missing 'direction' field; DB records also lacked it
+- [x] Fix signal calculation logic: added direction field to SizingEngine.compute() positions output
+- [x] Updated DB records with JSON_SET to add direction based on weight thresholds
+- [x] Test and verify all cards show proper signals (FX=NEUTRAL, Front=SHORT, Long=SHORT, Hard=SHORT)
