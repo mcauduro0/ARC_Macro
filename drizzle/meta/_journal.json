@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1770814313863,
+      "tag": "0000_lean_wrecker",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1770814410529,
+      "tag": "0001_closed_satana",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1770817594766,
+      "tag": "0002_spooky_sprite",
+      "breakpoints": true
+    }
+  ]
+}
