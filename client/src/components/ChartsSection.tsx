@@ -31,6 +31,15 @@ const COLORS = {
   carry: '#34d399',
   riskoff: '#f43f5e',
   stress: '#fbbf24',
+  // Cyclical raw macro factors
+  dxy: '#06b6d4',       // DXY index
+  vix: '#f43f5e',       // VIX
+  embi: '#fbbf24',      // EMBI spread
+  selic: '#34d399',     // SELIC
+  di_1y: '#a78bfa',     // DI 1Y
+  di_5y: '#818cf8',     // DI 5Y
+  ipca_exp: '#f472b6',  // IPCA expectations
+  cds_5y: '#fb923c',    // CDS 5Y
   // Grid
   grid: 'rgba(255,255,255,0.05)',
   text: 'rgba(255,255,255,0.5)',
@@ -220,34 +229,21 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
             <div className="h-[360px]">
               <ResponsiveContainer width="100%" height="100%">
                 {hasCyclicalData ? (
-                  <LineChart data={filteredCyclical} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                  <LineChart data={filteredCyclical} margin={{ top: 5, right: 60, bottom: 5, left: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
                     <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
-                    <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={[-3, 4]} />
+                    <YAxis yAxisId="left" tick={{ fontSize: 10, fill: COLORS.text }} label={{ value: 'Index / %', angle: -90, position: 'insideLeft', style: { fill: COLORS.text, fontSize: 9 } }} />
+                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: COLORS.text }} label={{ value: 'bps', angle: 90, position: 'insideRight', style: { fill: COLORS.text, fontSize: 9 } }} />
                     <RTooltip content={<CustomTooltip />} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
-                    <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-                    <Line type="monotone" dataKey="Z_DXY" stroke="#06b6d4" strokeWidth={2} dot={false} name="DXY" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_COMMODITIES" stroke="#34d399" strokeWidth={2} dot={false} name="Commodities" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_EMBI" stroke="#f43f5e" strokeWidth={2} dot={false} name="EMBI" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_RIR" stroke="#a78bfa" strokeWidth={2} dot={false} name="Juros Reais" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_FLOW" stroke="#fbbf24" strokeWidth={2} dot={false} name="Fluxo" connectNulls isAnimationActive={false} />
-                  </LineChart>
-                ) : hasStateVarData ? (
-                  <LineChart data={filteredStateVars} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
-                    <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
-                    <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={[-3, 4]} />
-                    <RTooltip content={<CustomTooltip />} />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
-                    <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
-                    <Line type="monotone" dataKey="Z_X1_diferencial_real" stroke={COLORS.z_x1} strokeWidth={2} dot={false} name="Diferencial Real" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_X2_surpresa_inflacao" stroke={COLORS.z_x2} strokeWidth={2} dot={false} name="Surpresa Inflação" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_X3_fiscal_risk" stroke={COLORS.z_x3} strokeWidth={2} dot={false} name="Risco Fiscal" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_X4_termos_de_troca" stroke={COLORS.z_x4} strokeWidth={2} dot={false} name="Termos de Troca" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_X5_dolar_global" stroke={COLORS.z_x5} strokeWidth={2} dot={false} name="Dólar Global" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_X6_risk_global" stroke={COLORS.z_x6} strokeWidth={2} dot={false} name="Risk Global" connectNulls isAnimationActive={false} />
-                    <Line type="monotone" dataKey="Z_X7_hiato" stroke={COLORS.z_x7} strokeWidth={2} dot={false} name="Hiato" connectNulls isAnimationActive={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="DXY" stroke={COLORS.dxy} strokeWidth={2} dot={false} name="DXY" connectNulls isAnimationActive={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="VIX" stroke={COLORS.vix} strokeWidth={2} dot={false} name="VIX" connectNulls isAnimationActive={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="SELIC" stroke={COLORS.selic} strokeWidth={2} dot={false} name="SELIC (%)" connectNulls isAnimationActive={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="DI_1Y" stroke={COLORS.di_1y} strokeWidth={2} dot={false} name="DI 1Y (%)" connectNulls isAnimationActive={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="DI_5Y" stroke={COLORS.di_5y} strokeWidth={2} dot={false} name="DI 5Y (%)" connectNulls isAnimationActive={false} />
+                    <Line yAxisId="left" type="monotone" dataKey="IPCA_Exp" stroke={COLORS.ipca_exp} strokeWidth={2} dot={false} name="IPCA Exp (%)" connectNulls isAnimationActive={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="EMBI" stroke={COLORS.embi} strokeWidth={2} dot={false} name="EMBI (bps)" connectNulls isAnimationActive={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="CDS_5Y" stroke={COLORS.cds_5y} strokeWidth={2} dot={false} name="CDS 5Y (bps)" connectNulls isAnimationActive={false} />
                   </LineChart>
                 ) : (
                   <LineChart data={[]} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>

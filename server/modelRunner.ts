@@ -11,6 +11,7 @@ interface ModelOutput {
   timeseries: Array<Record<string, unknown>>;
   regime: Array<Record<string, unknown>>;
   state_variables_ts?: Array<Record<string, unknown>>;
+  cyclical_factors_ts?: Array<Record<string, unknown>>;
   // Legacy fields (from old FX-only model, via run_model.py)
   legacy_fx?: { dashboard: Record<string, unknown> } | null;
   legacy_timeseries?: Array<Record<string, unknown>>;
@@ -42,7 +43,7 @@ export async function executeModel(): Promise<{ success: boolean; runId?: number
       dashboardJson: parsed.dashboard,
       timeseriesJson: parsed.timeseries,
       regimeJson: parsed.regime,
-      cyclicalJson: [],  // Macro Risk OS integrates cyclical into state_variables_ts
+      cyclicalJson: parsed.cyclical_factors_ts || [],  // Raw macro factors (DXY, VIX, EMBI, etc.)
       stateVariablesJson: parsed.state_variables_ts || [],
       legacyDashboardJson: parsed.legacy_fx?.dashboard || null,
       legacyTimeseriesJson: parsed.legacy_timeseries || null,

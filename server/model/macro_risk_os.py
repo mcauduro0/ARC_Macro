@@ -1432,6 +1432,8 @@ class RiskAggregation:
                     max_dd_hist = float(dd.min())
                     self.risk_metrics['current_drawdown'] = round(current_dd * 100, 2)
                     self.risk_metrics['max_drawdown_historical'] = round(max_dd_hist * 100, 2)
+                    # max_drawdown is the main field used by the frontend ActionPanel
+                    self.risk_metrics['max_drawdown'] = round(max_dd_hist, 4)  # as decimal (e.g. -0.8426)
                     log(f"\n  Current drawdown: {current_dd*100:.2f}%")
                     log(f"  Max historical drawdown: {max_dd_hist*100:.2f}%")
             except Exception as e:
@@ -1598,12 +1600,14 @@ def _build_dashboard(data, states, z_states, models, expected_returns,
     timeseries = _build_timeseries(data, fair_values, z_states)
     regime_ts = _build_regime_timeseries(regime_info)
     state_ts = _build_state_timeseries(z_states)
+    cyclical_ts = _build_cyclical_timeseries(data)
     
     return {
         'dashboard': dashboard,
         'timeseries': timeseries,
         'regime': regime_ts,
         'state_variables_ts': state_ts,
+        'cyclical_factors_ts': cyclical_ts,
     }
 
 
@@ -1649,6 +1653,51 @@ def _build_regime_timeseries(regime_info):
         for col in probs.columns:
             obj[col] = round(float(probs.loc[date, col]), 4)
         records.append(obj)
+    
+    return records
+
+
+def _build_cyclical_timeseries(data):
+    """Build cyclical factors timeseries with raw macro data (not Z-scored).
+    Shows the underlying macro variables that drive the model's state variables."""
+    # Map state variables to their raw macro series
+    factor_map = {
+        'DXY': 'dxy',
+        'VIX': 'vix',
+        'EMBI': 'embi_spread',
+        'SELIC': 'selic_target',
+        'DI_1Y': 'di_1y',
+        'DI_5Y': 'di_5y',
+        'IPCA_Exp': 'ipca_exp_12m',
+        'CDS_5Y': 'cds_5y',
+    }
+    
+    # Collect all available series
+    series_dict = {}
+    for label, key in factor_map.items():
+        s = data.get(key, pd.Series(dtype=float))
+        if len(s) > 0:
+            series_dict[label] = s
+    
+    if not series_dict:
+        return []
+    
+    # Find all dates across all series
+    all_dates = set()
+    for s in series_dict.values():
+        all_dates.update(s.dropna().index)
+    all_dates = sorted(all_dates)
+    
+    records = []
+    for date in all_dates:
+        obj = {'date': date.strftime('%Y-%m-%d')}
+        has_data = False
+        for label, s in series_dict.items():
+            if date in s.index and not np.isnan(s.get(date, np.nan)):
+                obj[label] = round(float(s[date]), 2)
+                has_data = True
+        if has_data:
+            records.append(obj)
     
     return records
 

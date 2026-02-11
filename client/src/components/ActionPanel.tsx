@@ -122,7 +122,11 @@ export function ActionPanel({ dashboard: d }: Props) {
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-muted-foreground">Max Drawdown</span>
                   <span className="font-data text-sm font-bold text-rose-400">
-                    {(d.risk_metrics.max_drawdown * 100).toFixed(2)}%
+                    {d.risk_metrics.max_drawdown != null
+                      ? `${(d.risk_metrics.max_drawdown * 100).toFixed(2)}%`
+                      : d.risk_metrics.max_drawdown_historical != null
+                        ? `${d.risk_metrics.max_drawdown_historical.toFixed(2)}%`
+                        : 'N/A'}
                   </span>
                 </div>
                 {/* Stress Tests */}
