@@ -1,4 +1,4 @@
-import { TimeSeriesPoint, RegimePoint, CyclicalPoint, StateVarPoint } from '@/hooks/useModelData';
+import { TimeSeriesPoint, RegimePoint, CyclicalPoint, StateVarPoint, ScorePoint } from '@/hooks/useModelData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
@@ -12,6 +12,7 @@ interface Props {
   regimeProbs: RegimePoint[];
   cyclicalFactors: CyclicalPoint[];
   stateVariables?: StateVarPoint[];
+  score?: ScorePoint[];
 }
 
 const COLORS = {
@@ -40,6 +41,11 @@ const COLORS = {
   di_5y: '#818cf8',     // DI 5Y
   ipca_exp: '#f472b6',  // IPCA expectations
   cds_5y: '#fb923c',    // CDS 5Y
+  // Score
+  score_total: '#06b6d4',       // Cyan - total score
+  score_structural: '#a78bfa',  // Purple - structural (FV misalignment)
+  score_cyclical: '#34d399',    // Green - cyclical (Z-scores)
+  score_regime: '#f59e0b',      // Amber - regime adjustment
   // Grid
   grid: 'rgba(255,255,255,0.05)',
   text: 'rgba(255,255,255,0.5)',
@@ -64,7 +70,7 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 type TimeRange = '5Y' | '10Y' | 'ALL';
-type TabValue = 'fairvalue' | 'zscores' | 'regime' | 'cyclical';
+type TabValue = 'fairvalue' | 'zscores' | 'regime' | 'cyclical' | 'score';
 
 function filterByRange<T extends { date: string }>(data: T[], range: TimeRange): T[] {
   if (range === 'ALL') return data;
@@ -74,7 +80,7 @@ function filterByRange<T extends { date: string }>(data: T[], range: TimeRange):
   return data.filter(d => new Date(d.date) >= cutoff);
 }
 
-export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateVariables = [] }: Props) {
+export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateVariables = [], score = [] }: Props) {
   const [timeRange, setTimeRange] = useState<TimeRange>('10Y');
   const [activeTab, setActiveTab] = useState<TabValue>('fairvalue');
 
@@ -101,8 +107,10 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
   const filteredRegime = useMemo(() => filterByRange(regimeProbs, timeRange), [regimeProbs, timeRange]);
   const filteredStateVars = useMemo(() => normalizeZScores(filterByRange(stateVariables, timeRange)), [stateVariables, timeRange]);
   const filteredCyclical = useMemo(() => filterByRange(cyclicalFactors, timeRange), [cyclicalFactors, timeRange]);
+  const filteredScore = useMemo(() => filterByRange(score, timeRange), [score, timeRange]);
   
   const hasCyclicalData = filteredCyclical.length > 0;
+  const hasScoreData = filteredScore.length > 0;
   const hasStateVarData = filteredStateVars.length > 0;
 
   const formatDate = (d: string) => {
@@ -115,6 +123,7 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
     { value: 'zscores', label: 'Z-Scores' },
     { value: 'regime', label: 'Regime' },
     { value: 'cyclical', label: 'Cíclico' },
+    { value: 'score', label: 'Score' },
   ];
 
   return (
@@ -244,6 +253,35 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
                     <Line yAxisId="left" type="monotone" dataKey="IPCA_Exp" stroke={COLORS.ipca_exp} strokeWidth={2} dot={false} name="IPCA Exp (%)" connectNulls isAnimationActive={false} />
                     <Line yAxisId="right" type="monotone" dataKey="EMBI" stroke={COLORS.embi} strokeWidth={2} dot={false} name="EMBI (bps)" connectNulls isAnimationActive={false} />
                     <Line yAxisId="right" type="monotone" dataKey="CDS_5Y" stroke={COLORS.cds_5y} strokeWidth={2} dot={false} name="CDS 5Y (bps)" connectNulls isAnimationActive={false} />
+                  </LineChart>
+                ) : (
+                  <LineChart data={[]} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                    <XAxis tick={{ fontSize: 10, fill: COLORS.text }} />
+                    <YAxis tick={{ fontSize: 10, fill: COLORS.text }} />
+                  </LineChart>
+                )}
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {activeTab === 'score' && (
+            <div className="h-[360px]">
+              <ResponsiveContainer width="100%" height="100%">
+                {hasScoreData ? (
+                  <LineChart data={filteredScore} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                    <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
+                    <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={['auto', 'auto']} />
+                    <RTooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <ReferenceLine y={0} stroke="rgba(255,255,255,0.3)" strokeWidth={1.5} />
+                    <ReferenceLine y={3} stroke="rgba(52,211,153,0.3)" strokeDasharray="4 3" label={{ value: 'BUY', position: 'right', fill: 'rgba(52,211,153,0.5)', fontSize: 9 }} />
+                    <ReferenceLine y={-3} stroke="rgba(244,63,94,0.3)" strokeDasharray="4 3" label={{ value: 'SELL', position: 'right', fill: 'rgba(244,63,94,0.5)', fontSize: 9 }} />
+                    <Line type="monotone" dataKey="score_total" stroke={COLORS.score_total} strokeWidth={3} dot={false} name="Score Total" connectNulls isAnimationActive={false} />
+                    <Line type="monotone" dataKey="score_structural" stroke={COLORS.score_structural} strokeWidth={2} dot={false} name="Estrutural (FV)" strokeDasharray="6 3" connectNulls isAnimationActive={false} />
+                    <Line type="monotone" dataKey="score_cyclical" stroke={COLORS.score_cyclical} strokeWidth={2} dot={false} name="Cíclico (Z)" strokeDasharray="4 2" connectNulls isAnimationActive={false} />
+                    <Line type="monotone" dataKey="score_regime" stroke={COLORS.score_regime} strokeWidth={2} dot={false} name="Regime" strokeDasharray="3 3" connectNulls isAnimationActive={false} />
                   </LineChart>
                 ) : (
                   <LineChart data={[]} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>

@@ -148,11 +148,21 @@ export interface RegimePoint {
 
 export interface CyclicalPoint {
   date: string;
-  Z_DXY: number | null;
-  Z_COMMODITIES: number | null;
-  Z_EMBI: number | null;
-  Z_RIR: number | null;
-  Z_FLOW: number | null;
+  // Raw macro factors (from _build_cyclical_timeseries)
+  DXY?: number | null;
+  VIX?: number | null;
+  EMBI?: number | null;
+  SELIC?: number | null;
+  DI_1Y?: number | null;
+  DI_5Y?: number | null;
+  IPCA_Exp?: number | null;
+  CDS_5Y?: number | null;
+  // Legacy Z-scored factors (backward compat)
+  Z_DXY?: number | null;
+  Z_COMMODITIES?: number | null;
+  Z_EMBI?: number | null;
+  Z_RIR?: number | null;
+  Z_FLOW?: number | null;
 }
 
 export interface StateVarPoint {
@@ -164,6 +174,14 @@ export interface StateVarPoint {
   X5_dolar_global: number | null;
   X6_risk_global: number | null;
   X7_hiato: number | null;
+}
+
+export interface ScorePoint {
+  date: string;
+  score_total: number | null;
+  score_structural: number | null;
+  score_cyclical: number | null;
+  score_regime: number | null;
 }
 
 /**
@@ -188,6 +206,7 @@ export function useModelData() {
         regimeProbs: (apiData.regime || []) as unknown as RegimePoint[],
         cyclicalFactors: (apiData.cyclical || []) as unknown as CyclicalPoint[],
         stateVariables: (apiData.stateVariables || []) as unknown as StateVarPoint[],
+        score: (apiData.score || []) as unknown as ScorePoint[],
         isMacroRiskOS: isMacroRiskOS(apiData.dashboard as Record<string, unknown>),
         loading: false,
         error: null as string | null,
@@ -203,6 +222,7 @@ export function useModelData() {
       regimeProbs: regimeData as unknown as RegimePoint[],
       cyclicalFactors: cyclicalData as unknown as CyclicalPoint[],
       stateVariables: [] as StateVarPoint[],
+      score: [] as ScorePoint[],
       isMacroRiskOS: false,
       loading: false,
       error: null as string | null,

@@ -1601,6 +1601,7 @@ def _build_dashboard(data, states, z_states, models, expected_returns,
     regime_ts = _build_regime_timeseries(regime_info)
     state_ts = _build_state_timeseries(z_states)
     cyclical_ts = _build_cyclical_timeseries(data)
+    score_ts = _build_score_timeseries(data, fair_values, z_states, regime_info)
     
     return {
         'dashboard': dashboard,
@@ -1608,6 +1609,7 @@ def _build_dashboard(data, states, z_states, models, expected_returns,
         'regime': regime_ts,
         'state_variables_ts': state_ts,
         'cyclical_factors_ts': cyclical_ts,
+        'score_ts': score_ts,
     }
 
 
@@ -1723,6 +1725,109 @@ def _build_state_timeseries(z_states):
                 obj[short_key] = round(float(z_series[date]), 3)
         if len(obj) > 1:  # Has at least one Z-score
             records.append(obj)
+    
+    return records
+
+
+def _build_score_timeseries(data, fair_values, z_states, regime_info):
+    """Build score timeseries decomposed into structural, cyclical, and regime components.
+    
+    Score decomposition:
+    - score_structural: FX misalignment signal (positive when BRL undervalued = buy signal)
+    - score_cyclical: weighted average of Z-scores (captures macro cycle positioning)
+    - score_regime: regime-based adjustment (Carry=+1, RiskOff=-1, StressDom=-2)
+    - score_total: sum of all three components
+    """
+    spot = data.get('spot_brlusd', pd.Series(dtype=float))
+    fx_fv = fair_values.get('fx', {})
+    fx_fair = fx_fv.get('fair_value', pd.Series(dtype=float))
+    ppp_fair = fx_fv.get('ppp_fair', pd.Series(dtype=float))
+    beer_fair = fx_fv.get('beer_fair', pd.Series(dtype=float))
+    
+    regime_probs = regime_info.get('regime_probs', pd.DataFrame())
+    
+    # Build monthly index from spot
+    if len(spot) == 0:
+        return []
+    
+    spot_m = to_monthly(spot)
+    
+    records = []
+    for date in spot_m.index:
+        obj = {'date': date.strftime('%Y-%m-%d')}
+        
+        # --- Score Structural: FX misalignment ---
+        # Positive = BRL undervalued (spot > fair) = bearish USD signal
+        # Negative = BRL overvalued (spot < fair) = bullish USD signal
+        # Scale: misalignment * 5 to get score in [-5, +5] range
+        s_structural = None
+        if date in fx_fair.index and not np.isnan(fx_fair.get(date, np.nan)):
+            s = float(spot_m.get(date, np.nan))
+            fv = float(fx_fair.get(date, np.nan))
+            if not np.isnan(s) and not np.isnan(fv) and fv > 0:
+                misalignment = (s - fv) / fv  # positive = BRL weak vs fair
+                # Invert: if BRL undervalued (spot > fair), structural score is negative (sell USD)
+                s_structural = round(-misalignment * 10, 3)  # Scale to ~[-5, +5]
+        
+        # --- Score Cyclical: weighted Z-score average ---
+        # Uses the 7 state variables, weighted by economic significance
+        # Positive Z-scores in risk factors = negative for BRL = negative score
+        z_weights = {
+            'Z_X1_diferencial_real': +0.25,   # Higher real diff = BRL positive
+            'Z_X2_surpresa_inflacao': -0.10,  # Inflation surprise = BRL negative
+            'Z_X3_fiscal_risk': -0.20,        # Fiscal risk = BRL negative
+            'Z_X4_termos_de_troca': +0.15,    # Better ToT = BRL positive
+            'Z_X5_dolar_global': -0.15,       # Strong USD = BRL negative
+            'Z_X6_risk_global': -0.10,        # Risk off = BRL negative
+            'Z_X7_hiato': +0.05,              # Positive output gap = BRL positive
+        }
+        
+        s_cyclical = 0.0
+        z_count = 0
+        for z_key, weight in z_weights.items():
+            if z_key in z_states and date in z_states[z_key].index:
+                z_val = z_states[z_key].get(date, np.nan)
+                if not np.isnan(z_val):
+                    s_cyclical += float(z_val) * weight
+                    z_count += 1
+        
+        if z_count > 0:
+            s_cyclical = round(s_cyclical * (7 / max(z_count, 1)), 3)  # Normalize for missing factors
+        else:
+            s_cyclical = None
+        
+        # --- Score Regime: regime probability adjustment ---
+        # Carry regime = positive, RiskOff = negative, StressDom = very negative
+        s_regime = None
+        if len(regime_probs) > 0 and date in regime_probs.index:
+            p_carry = float(regime_probs.loc[date].get('P_Carry', 0))
+            p_riskoff = float(regime_probs.loc[date].get('P_RiskOff', 0))
+            p_stress = float(regime_probs.loc[date].get('P_StressDom', 0))
+            # Carry = +2, RiskOff = -1, Stress = -3
+            s_regime = round(p_carry * 2.0 + p_riskoff * (-1.0) + p_stress * (-3.0), 3)
+        
+        # --- Score Total ---
+        components = [s_structural, s_cyclical, s_regime]
+        valid = [c for c in components if c is not None]
+        
+        if valid:
+            s_total = round(sum(valid), 3)
+            obj['score_total'] = s_total
+        if s_structural is not None:
+            obj['score_structural'] = s_structural
+        if s_cyclical is not None:
+            obj['score_cyclical'] = s_cyclical
+        if s_regime is not None:
+            obj['score_regime'] = s_regime
+        
+        if len(obj) > 1:  # Has at least one score
+            records.append(obj)
+    
+    log(f"\n  Score timeseries: {len(records)} points")
+    if records:
+        last = records[-1]
+        log(f"  Latest: total={last.get('score_total')}, struct={last.get('score_structural')}, "
+            f"cycl={last.get('score_cyclical')}, regime={last.get('score_regime')}")
     
     return records
 

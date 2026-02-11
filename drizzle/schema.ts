@@ -30,6 +30,7 @@ export const modelRuns = mysqlTable("model_runs", {
   timeseriesJson: json("timeseriesJson").notNull(), // FX timeseries + fair values
   regimeJson: json("regimeJson").notNull(), // 3-state regime probabilities
   stateVariablesJson: json("stateVariablesJson"), // X1-X7 Z-score timeseries
+  scoreJson: json("scoreJson"), // Score timeseries (total, structural, cyclical, regime)
   // Legacy data for backward compatibility
   cyclicalJson: json("cyclicalJson").notNull(), // Cyclical factor Z-scores
   legacyDashboardJson: json("legacyDashboardJson"), // Legacy FX-only model

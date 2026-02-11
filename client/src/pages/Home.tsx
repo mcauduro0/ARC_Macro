@@ -14,7 +14,7 @@ import { ModelDetails } from '@/components/ModelDetails';
 import { Loader2 } from 'lucide-react';
 
 export default function Home() {
-  const { dashboard, timeseries, regimeProbs, cyclicalFactors, loading, error, source, lastUpdated } = useModelData();
+  const { dashboard, timeseries, regimeProbs, cyclicalFactors, stateVariables, score, loading, error, source, lastUpdated } = useModelData();
 
   if (loading) {
     return (
@@ -55,6 +55,8 @@ export default function Home() {
           timeseries={timeseries}
           regimeProbs={regimeProbs}
           cyclicalFactors={cyclicalFactors}
+          stateVariables={stateVariables}
+          score={score}
         />
 
         {/* Stress Tests - Historical scenarios */}

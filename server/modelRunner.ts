@@ -12,6 +12,7 @@ interface ModelOutput {
   regime: Array<Record<string, unknown>>;
   state_variables_ts?: Array<Record<string, unknown>>;
   cyclical_factors_ts?: Array<Record<string, unknown>>;
+  score_ts?: Array<Record<string, unknown>>;
   // Legacy fields (from old FX-only model, via run_model.py)
   legacy_fx?: { dashboard: Record<string, unknown> } | null;
   legacy_timeseries?: Array<Record<string, unknown>>;
@@ -45,6 +46,7 @@ export async function executeModel(): Promise<{ success: boolean; runId?: number
       regimeJson: parsed.regime,
       cyclicalJson: parsed.cyclical_factors_ts || [],  // Raw macro factors (DXY, VIX, EMBI, etc.)
       stateVariablesJson: parsed.state_variables_ts || [],
+      scoreJson: parsed.score_ts || [],
       legacyDashboardJson: parsed.legacy_fx?.dashboard || null,
       legacyTimeseriesJson: parsed.legacy_timeseries || null,
       legacyRegimeJson: parsed.legacy_regime || null,

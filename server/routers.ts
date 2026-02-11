@@ -64,6 +64,7 @@ export const appRouter = router({
           regime: run.regimeJson,
           cyclical: run.cyclicalJson,
           stateVariables: run.stateVariablesJson || [],
+          score: run.scoreJson || [],
           // Legacy data for backward compatibility
           legacyDashboard: run.legacyDashboardJson,
           legacyTimeseries: run.legacyTimeseriesJson,
@@ -81,6 +82,7 @@ export const appRouter = router({
         regime: null,
         cyclical: null,
         stateVariables: null,
+        score: null,
         legacyDashboard: null,
         legacyTimeseries: null,
         legacyRegime: null,
