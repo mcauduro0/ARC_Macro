@@ -585,8 +585,8 @@ def collect_bcb():
     """Collect BCB data."""
     log("\n[BCB SGS]")
     mapping = {
-        "IPCA_MONTHLY":    433,
-        "IPCA_12M":        432,
+        "IPCA_MONTHLY":    433,   # IPCA variação mensal (%)
+        "IPCA_12M_BCB":    10764, # IPCA variação mensal (BCB 10764, backup)
         "IPCA_EXP_12M":    13522,
         "SELIC_META":       11,
         "SELIC_OVER":       4189,
@@ -598,9 +598,18 @@ def collect_bcb():
         "PRIMARY_BALANCE":  5793,
         "IBC_BR":           24363,
         "BOP_CURRENT":      22707,
-        "FX_CUPOM_1M":      3955,
-        "FX_CUPOM_3M":      3956,
-        "FX_CUPOM_12M":     3957,
+        # v2.3: Cupom cambial — use Swap DI x Dólar (BCB 7811-7815) for full coverage (1991-present)
+        # These are the onshore USD interest rates implied by the FX swap market
+        # Old series 3955/3956 were discontinued in 2012; 3954 only goes to 2024
+        "SWAP_DIXDOL_30D":   7811,   # Swap DI x Dólar 30 dias (1991-present)
+        "SWAP_DIXDOL_90D":   7812,   # Swap DI x Dólar 90 dias (1991-present)
+        "SWAP_DIXDOL_180D":  7813,   # Swap DI x Dólar 180 dias (1995-present)
+        "SWAP_DIXDOL_360D":  7814,   # Swap DI x Dólar 360 dias (1995-present)
+        # Also keep cupom cambial limpo 30d (3954) as cross-validation
+        "FX_CUPOM_LIMPO_30D": 3954,  # Cupom cambial limpo 30 dias (1994-2024)
+        # Legacy series for backward compat (will be empty after 2012)
+        "FX_CUPOM_1M":       3955,
+        "FX_CUPOM_3M":       3956,
     }
     result = {}
     for name, code in mapping.items():
@@ -725,6 +734,7 @@ def validate_data(all_data):
         "USDBRL": (1.5, 8.0, "BRL/USD"),
         "EMBI_SPREAD": (50, 2000, "bps"),
         "SELIC_META": (0.5, 30, "% a.a."),
+        "IPCA_12M":  (1.0, 20, "% a.a."),
     }
     ok = 0
     fail = 0
@@ -892,6 +902,33 @@ def merge_sources(all_data):
             save_series(all_data['CDS_5Y'], 'CDS_5Y')
             log(f"  CDS_5Y: using EMBI*0.7 proxy, last={all_data['CDS_5Y'].iloc[-1]:.0f} bps")
     
+    # Compute IPCA 12M (acumulado) from IPCA monthly variation (BCB 433)
+    # BCB 432 was the IPCA index number, NOT the YoY percentage
+    if 'IPCA_MONTHLY' in all_data and not all_data['IPCA_MONTHLY'].empty:
+        ipca_m = all_data['IPCA_MONTHLY'].sort_index()
+        if len(ipca_m) > 12:
+            # Rolling 12-month compounded inflation: (1+m1/100)*(1+m2/100)*...*(1+m12/100) - 1
+            ipca_factor = (1 + ipca_m / 100)
+            ipca_12m = ipca_factor.rolling(12).apply(lambda x: x.prod() - 1, raw=True) * 100
+            ipca_12m = ipca_12m.dropna()
+            all_data['IPCA_12M'] = ipca_12m
+            save_series(ipca_12m, 'IPCA_12M')
+            log(f"  IPCA_12M: COMPUTED from monthly, {len(ipca_12m)} pts, current={ipca_12m.iloc[-1]:.2f}%")
+        else:
+            log(f"  IPCA_MONTHLY: only {len(ipca_m)} pts, need >12 for 12M computation")
+    elif 'IPCA_12M_BCB' in all_data and not all_data['IPCA_12M_BCB'].empty:
+        # Fallback: use BCB 10764 directly (it's also monthly variation, compute 12M)
+        ipca_m = all_data['IPCA_12M_BCB'].sort_index()
+        if len(ipca_m) > 12:
+            ipca_factor = (1 + ipca_m / 100)
+            ipca_12m = ipca_factor.rolling(12).apply(lambda x: x.prod() - 1, raw=True) * 100
+            ipca_12m = ipca_12m.dropna()
+            all_data['IPCA_12M'] = ipca_12m
+            save_series(ipca_12m, 'IPCA_12M')
+            log(f"  IPCA_12M: COMPUTED from BCB 10764, {len(ipca_12m)} pts, current={ipca_12m.iloc[-1]:.2f}%")
+    else:
+        log(f"  WARNING: No IPCA monthly data available for 12M computation")
+
     # ANBIMA → Trading Economics → SELIC construction priority for DI curve
     # Use ANBIMA ETTJ as primary source for DI curve if available
     for tenor in ['DI_3M', 'DI_6M', 'DI_1Y', 'DI_2Y', 'DI_3Y', 'DI_5Y', 'DI_10Y']:
