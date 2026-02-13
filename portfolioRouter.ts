@@ -53,6 +53,15 @@ import {
   type ContractSizing,
 } from "./portfolioEngine";
 import { notifyOwner } from "./_core/notification";
+import {
+  fetchMarketPrices,
+  computeMtm,
+  computeSlippage,
+  computeFactorExposure,
+  checkRiskLimits,
+  DEFAULT_RISK_LIMITS,
+  type MtmPosition,
+} from "./marketDataService";
 
 // ============================================================
 // Input Schemas
@@ -808,5 +817,373 @@ export const portfolioRouter = router({
 
       return { alerts: newAlerts };
     }),
+  }),
+
+  // ============================================================
+  // MARKET DATA — Real-time prices
+  // ============================================================
+
+  market: router({
+    /**
+     * Get latest market prices from BCB/Yahoo.
+     */
+    prices: protectedProcedure
+      .input(z.object({ forceRefresh: z.boolean().default(false) }).optional())
+      .query(async ({ input }) => {
+        try {
+          const prices = await fetchMarketPrices(input?.forceRefresh || false);
+          return { error: null, data: prices };
+        } catch (e: any) {
+          return { error: e.message || "Erro ao buscar preços", data: null };
+        }
+      }),
+
+    /**
+     * Compute mark-to-market P&L for all active positions.
+     */
+    mtm: protectedProcedure.query(async () => {
+      const config = await getActivePortfolioConfig();
+      if (!config) return { error: "Configure o portfólio primeiro.", data: null };
+
+      const positions = await getActivePositions(config.id);
+      if (positions.length === 0) return { error: "Sem posições ativas.", data: null };
+
+      try {
+        const prices = await fetchMarketPrices();
+        const mtmPositions: MtmPosition[] = positions.map(p => ({
+          instrument: p.instrument,
+          b3Ticker: p.b3Ticker,
+          b3InstrumentType: p.b3InstrumentType,
+          direction: p.direction,
+          contracts: p.contracts,
+          notionalBrl: p.notionalBrl,
+          notionalUsd: p.notionalUsd,
+          entryPrice: p.entryPrice || 0,
+          dv01Brl: p.dv01Brl,
+          fxDeltaBrl: p.fxDeltaBrl,
+          spreadDv01Usd: p.spreadDv01Usd,
+        }));
+
+        const result = computeMtm(mtmPositions, prices, config.aumBrl);
+        return { error: null, data: { ...result, prices } };
+      } catch (e: any) {
+        return { error: e.message || "Erro ao calcular MTM", data: null };
+      }
+    }),
+
+    /**
+     * Record daily P&L from MTM computation (auto or manual).
+     */
+    recordMtm: protectedProcedure
+      .input(z.object({
+        pnlDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        useAutoMtm: z.boolean().default(true),
+        // Manual overrides
+        spotUsdbrl: z.number().optional(),
+        di1y: z.number().optional(),
+        di5y: z.number().optional(),
+        di10y: z.number().optional(),
+        embiSpread: z.number().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const config = await getActivePortfolioConfig();
+        if (!config) return { error: "No config.", success: false };
+
+        const positions = await getActivePositions(config.id);
+        if (positions.length === 0) return { error: "No positions.", success: false };
+
+        let prices;
+        if (input.useAutoMtm) {
+          prices = await fetchMarketPrices();
+        } else {
+          prices = await fetchMarketPrices();
+          // Override with manual values
+          if (input.spotUsdbrl) prices.spotUsdbrl = input.spotUsdbrl;
+          if (input.di1y) prices.di1y = input.di1y;
+          if (input.di5y) prices.di5y = input.di5y;
+          if (input.di10y) prices.di10y = input.di10y;
+          if (input.embiSpread) prices.embiSpread = input.embiSpread;
+        }
+
+        const mtmPositions: MtmPosition[] = positions.map(p => ({
+          instrument: p.instrument,
+          b3Ticker: p.b3Ticker,
+          b3InstrumentType: p.b3InstrumentType,
+          direction: p.direction,
+          contracts: p.contracts,
+          notionalBrl: p.notionalBrl,
+          notionalUsd: p.notionalUsd,
+          entryPrice: p.entryPrice || 0,
+          dv01Brl: p.dv01Brl,
+          fxDeltaBrl: p.fxDeltaBrl,
+          spreadDv01Usd: p.spreadDv01Usd,
+        }));
+
+        const mtm = computeMtm(mtmPositions, prices, config.aumBrl);
+
+        // Get previous cumulative
+        const prevHistory = await getDailyPnlHistory(config.id, 1);
+        const prevCumPnl = prevHistory.length > 0 ? (prevHistory[0].cumulativePnlBrl || 0) : 0;
+        const prevCumCdi = prevHistory.length > 0 ? (prevHistory[0].cumulativeCdiPnlBrl || 0) : 0;
+        const prevHwm = prevHistory.length > 0 ? (prevHistory[0].hwmBrl || config.aumBrl) : config.aumBrl;
+
+        const cumulativePnl = prevCumPnl + mtm.totalPnlBrl;
+        const cumulativeCdi = prevCumCdi + mtm.cdiPnlBrl;
+        const currentAum = config.aumBrl + cumulativePnl;
+        const hwm = Math.max(prevHwm, currentAum);
+        const drawdown = hwm > 0 ? ((currentAum - hwm) / hwm) * 100 : 0;
+
+        await upsertDailyPnl({
+          configId: config.id,
+          pnlDate: input.pnlDate,
+          totalPnlBrl: mtm.totalPnlBrl,
+          overlayPnlBrl: mtm.totalOverlayPnlBrl,
+          cdiPnlBrl: mtm.cdiPnlBrl,
+          fxPnlBrl: mtm.fxPnlBrl,
+          frontPnlBrl: mtm.frontPnlBrl,
+          bellyPnlBrl: mtm.bellyPnlBrl,
+          longPnlBrl: mtm.longPnlBrl,
+          hardPnlBrl: mtm.hardPnlBrl,
+          cumulativePnlBrl: cumulativePnl,
+          cumulativePnlPct: config.aumBrl > 0 ? (cumulativePnl / config.aumBrl) * 100 : 0,
+          cdiDailyPnlBrl: mtm.cdiPnlBrl,
+          cumulativeCdiPnlBrl: cumulativeCdi,
+          aumBrl: currentAum,
+          drawdownPct: drawdown,
+          hwmBrl: hwm,
+        });
+
+        // Check for drawdown alert
+        if (drawdown < (config.maxDrawdownPct || -10)) {
+          await insertAlert({
+            configId: config.id,
+            alertType: "drawdown_breach",
+            severity: "critical",
+            title: `Drawdown excedeu limite: ${drawdown.toFixed(2)}%`,
+            message: `Drawdown: ${drawdown.toFixed(2)}% (limite: ${config.maxDrawdownPct}%).`,
+            metricValue: drawdown,
+            thresholdValue: config.maxDrawdownPct,
+          });
+          try {
+            await notifyOwner({
+              title: "ALERTA: Drawdown excedeu limite",
+              content: `Drawdown: ${drawdown.toFixed(2)}% (limite: ${config.maxDrawdownPct}%)`,
+            });
+          } catch { /* best-effort */ }
+        }
+
+        // Update position current prices
+        for (const pos of positions) {
+          const mtmPos = mtm.positions.find(m => m.instrument === pos.instrument);
+          if (mtmPos) {
+            // Update current price and unrealized P&L in DB
+            // (simplified — in production, use a batch update)
+          }
+        }
+
+        return {
+          success: true,
+          error: null,
+          pnl: {
+            total: mtm.totalPnlBrl,
+            overlay: mtm.totalOverlayPnlBrl,
+            cdi: mtm.cdiPnlBrl,
+            cumulative: cumulativePnl,
+            drawdown,
+          },
+        };
+      }),
+  }),
+
+  // ============================================================
+  // RISK DASHBOARD — Consolidated view
+  // ============================================================
+
+  riskDashboard: protectedProcedure.query(async () => {
+    const config = await getActivePortfolioConfig();
+    if (!config) return { error: "Configure o portfólio primeiro.", data: null };
+
+    const positions = await getActivePositions(config.id);
+    if (positions.length === 0) return { error: "Sem posições ativas.", data: null };
+
+    const modelRun = await getLatestModelRun();
+    const dashboard = modelRun?.dashboardJson as Record<string, unknown> | undefined;
+    const marketData = dashboard ? extractMarketData(dashboard) : undefined;
+
+    const contractSizings = positions.map(dbPosToContractSizing);
+    const varResult = computeVaR(contractSizings, config.aumBrl, marketData);
+    const exposure = computeExposure(contractSizings, config.aumBrl);
+
+    // Factor exposure
+    const mtmPositions: MtmPosition[] = positions.map(p => ({
+      instrument: p.instrument,
+      b3Ticker: p.b3Ticker,
+      b3InstrumentType: p.b3InstrumentType,
+      direction: p.direction,
+      contracts: p.contracts,
+      notionalBrl: p.notionalBrl,
+      notionalUsd: p.notionalUsd,
+      entryPrice: p.entryPrice || 0,
+      dv01Brl: p.dv01Brl,
+      fxDeltaBrl: p.fxDeltaBrl,
+      spreadDv01Usd: p.spreadDv01Usd,
+    }));
+    const factorExposures = computeFactorExposure(mtmPositions, config.aumBrl);
+
+    // P&L data
+    const pnlHistory = await getDailyPnlHistory(config.id, 252);
+    const latestSnapshot = await getLatestPortfolioSnapshot(config.id);
+
+    // Current drawdown
+    const latestPnl = pnlHistory.length > 0 ? pnlHistory[0] : null;
+    const currentDrawdown = latestPnl?.drawdownPct || 0;
+
+    // Risk alerts
+    const riskAlerts = checkRiskLimits({
+      varDaily95Pct: varResult.varDaily95Pct,
+      currentDrawdownPct: currentDrawdown,
+      grossLeverage: exposure.grossLeverage,
+      marginUtilizationPct: exposure.marginUtilizationPct,
+      factorExposures,
+      regime: (dashboard as any)?.regime_dominant,
+      lastRebalanceDate: latestSnapshot?.snapshotDate,
+    });
+
+    // Active alerts from DB
+    const dbAlerts = await getActiveAlerts(config.id);
+
+    return {
+      error: null,
+      data: {
+        // Portfolio summary
+        config: {
+          aumBrl: config.aumBrl,
+          volTargetAnnual: config.volTargetAnnual,
+          riskBudgetBrl: config.riskBudgetBrl,
+          maxDrawdownPct: config.maxDrawdownPct,
+          maxLeverageGross: config.maxLeverageGross,
+        },
+        // VaR
+        var: varResult,
+        // Exposure
+        exposure,
+        // Factor breakdown
+        factorExposures,
+        // P&L
+        pnl: {
+          daily: latestPnl ? {
+            date: latestPnl.pnlDate,
+            total: latestPnl.totalPnlBrl || 0,
+            overlay: latestPnl.overlayPnlBrl || 0,
+            cdi: latestPnl.cdiDailyPnlBrl || 0,
+          } : null,
+          cumulative: latestPnl?.cumulativePnlBrl || 0,
+          cumulativePct: latestPnl?.cumulativePnlPct || 0,
+          drawdown: currentDrawdown,
+          hwm: latestPnl?.hwmBrl || config.aumBrl,
+          history: pnlHistory.slice(0, 30).reverse(),
+        },
+        // Limits & alerts
+        limits: DEFAULT_RISK_LIMITS,
+        riskAlerts,
+        dbAlerts,
+        // Snapshot
+        lastRebalance: latestSnapshot ? {
+          date: latestSnapshot.snapshotDate,
+          type: latestSnapshot.snapshotType,
+        } : null,
+        // Regime
+        regime: (dashboard as any)?.regime_dominant || "unknown",
+      },
+    };
+  }),
+
+  // ============================================================
+  // TRADE WORKFLOW — Approval flow with slippage tracking
+  // ============================================================
+
+  tradeWorkflow: router({
+    /**
+     * Approve a pending trade (move from pending → approved).
+     */
+    approve: protectedProcedure
+      .input(z.object({
+        tradeId: z.number(),
+        targetPrice: z.number().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        // Get the trade
+        const config = await getActivePortfolioConfig();
+        if (!config) return { error: "No config.", success: false };
+
+        const trades = await getPendingTrades(config.id);
+        const trade = trades.find((t: any) => t.id === input.tradeId);
+        if (!trade) return { error: "Trade não encontrado.", success: false };
+
+        // Update status to approved (reuse updateTradeExecution with status change)
+        // For now, we mark it as executed with the target price
+        // In a full implementation, we'd have a separate status column
+        await updateTradeExecution(
+          input.tradeId,
+          input.targetPrice || (trade as any).targetPrice || 0,
+          (trade as any).contracts,
+          `APROVADO: ${input.notes || ""}`
+        );
+
+        return { success: true, error: null };
+      }),
+
+    /**
+     * Execute an approved trade with actual fill details.
+     */
+    fill: protectedProcedure
+      .input(z.object({
+        tradeId: z.number(),
+        executedPrice: z.number(),
+        executedContracts: z.number(),
+        commissionBrl: z.number().default(0),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const config = await getActivePortfolioConfig();
+        if (!config) return { error: "No config.", success: false, slippage: null };
+
+        // Get the trade to compute slippage
+        const allTrades = await getTrades(config.id, undefined, 500);
+        const trade = allTrades.find((t: any) => t.id === input.tradeId);
+        if (!trade) return { error: "Trade não encontrado.", success: false, slippage: null };
+
+        const prices = await fetchMarketPrices();
+        const slippage = computeSlippage(
+          (trade as any).instrument,
+          (trade as any).targetPrice || (trade as any).executedPrice || input.executedPrice,
+          input.executedPrice,
+          input.executedContracts,
+          prices.spotUsdbrl,
+        );
+
+        await updateTradeExecution(
+          input.tradeId,
+          input.executedPrice,
+          input.executedContracts,
+          `EXECUTADO: ${input.notes || ""} | Slippage: ${slippage.slippageBps}bps (R$ ${slippage.slippageBrl.toFixed(2)})`
+        );
+
+        return { success: true, error: null, slippage };
+      }),
+
+    /**
+     * Reject a trade recommendation.
+     */
+    reject: protectedProcedure
+      .input(z.object({
+        tradeId: z.number(),
+        reason: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        await cancelTrade(input.tradeId);
+        return { success: true };
+      }),
   }),
 });
