@@ -20,8 +20,11 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from sklearn.linear_model import Ridge
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+import xgboost as xgb
+from arch import arch_model
 from scipy import stats
+import shap
 warnings.filterwarnings('ignore')
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -39,6 +42,8 @@ DEFAULT_CONFIG = {
     "rebalance": "monthly",
     "prediction_horizon": "1m",
     "training_window_months": 60,
+    "expanding_window": True,  # v3.8: True = expanding window (use all available data), False = fixed rolling window
+    "min_training_months": 60,  # v3.8: minimum training period before predictions start
     "refit_frequency": "monthly",
     "standardization_window_months": 60,
     "std_floor": 0.5,
@@ -63,11 +68,20 @@ DEFAULT_CONFIG = {
     "transaction_costs_bps": {
         "fx": 5, "front": 2, "belly": 3, "long": 4, "hard": 5
     },
+    # v3.8: Regime-dependent transaction cost multipliers
+    # In stress regimes, bid-ask spreads widen → higher costs
+    "tc_regime_multipliers": {
+        "carry": 1.0,       # Normal market: base costs
+        "riskoff": 1.5,     # Risk-off: 50% wider spreads
+        "stress": 2.5,      # Stress: 150% wider spreads
+        "domestic_stress": 2.0,  # Domestic stress: 100% wider
+        "domestic_calm": 1.0     # Domestic calm: base costs
+    },
     "turnover_penalty_bps": 2,
     "gamma": 2.0,  # risk aversion
     "score_demeaning_window": 60,  # rolling window for score z-score normalization
     # v2.3 improvements
-    "fx_fv_weights": {"ppp": 0.4, "beer": 0.4, "cyc": 0.2},
+    "fx_fv_weights": {"beer": 1.0},  # BEER-only fair value (institutional standard: GSDEER/BEER). PPP excluded (Balassa-Samuelson bias). Cyclical (Z_real_diff) used as trading signal via mu_fx_val, not in composite.
     "fx_cyclical_beta": 0.05,
     "ic_gating_threshold": 0.0,  # zero out mu for instruments with IC < threshold
     "ic_gating_min_obs": 24,  # minimum observations before IC gating kicks in
@@ -266,6 +280,32 @@ class DataLayer:
         if len(self.data['reer']) == 0:
             self.data['reer'] = load_series('REER_BCB')
 
+        # Balassa-Samuelson & FEER data
+        gdppc_path = os.path.join(DATA_DIR, 'GDP_PER_CAPITA.csv')
+        if os.path.exists(gdppc_path):
+            gdppc_df = pd.read_csv(gdppc_path)
+            gdppc_df['date'] = pd.to_datetime(gdppc_df['date'])
+            gdppc_df = gdppc_df.set_index('date')
+            if 'gdppc_ratio' in gdppc_df.columns:
+                self.data['gdppc_ratio'] = gdppc_df['gdppc_ratio'].dropna()
+            log(f"    gdppc_ratio loaded: {len(self.data.get('gdppc_ratio', []))} pts")
+        ca_path = os.path.join(DATA_DIR, 'CURRENT_ACCOUNT.csv')
+        if os.path.exists(ca_path):
+            ca_df = pd.read_csv(ca_path)
+            ca_df['date'] = pd.to_datetime(ca_df['date'])
+            ca_df = ca_df.set_index('date')
+            if 'ca_pct_gdp' in ca_df.columns:
+                self.data['ca_pct_gdp'] = ca_df['ca_pct_gdp'].dropna()
+            log(f"    ca_pct_gdp loaded: {len(self.data.get('ca_pct_gdp', []))} pts")
+        trade_path = os.path.join(DATA_DIR, 'TRADE_OPENNESS.csv')
+        if os.path.exists(trade_path):
+            trade_df = pd.read_csv(trade_path)
+            trade_df['date'] = pd.to_datetime(trade_df['date'])
+            trade_df = trade_df.set_index('date')
+            if 'trade_pct_gdp' in trade_df.columns:
+                self.data['trade_openness'] = trade_df['trade_pct_gdp'].dropna()
+            log(f"    trade_openness loaded: {len(self.data.get('trade_openness', []))} pts")
+
         # BEER fundamentals
         self.data['bop_current'] = load_series('BOP_CURRENT')
         self.data['ibc_br'] = load_series('IBC_BR')
@@ -281,6 +321,12 @@ class DataLayer:
 
         # EWZ (equity risk appetite)
         self.data['ewz'] = load_series('EWZ')
+
+        # v3.7: Additional variables
+        self.data['focus_fx_12m'] = load_series('FOCUS_FX_12M')
+        self.data['cftc_brl_net_spec'] = load_series('CFTC_BRL_NET_SPEC')
+        self.data['idp_flow'] = load_series('IDP_FLOW')
+        self.data['portfolio_flow'] = load_series('PORTFOLIO_FLOW')
 
         log(f"\n  Loaded {sum(1 for v in self.data.values() if len(v) > 0)} series")
         for k, v in sorted(self.data.items()):
@@ -310,14 +356,66 @@ class DataLayer:
             # Fallback: use the raw series but warn
             log(f"    WARNING: using raw ipca_yoy series (may be index number, not YoY %)")
 
+        # Forward-fill REER beyond last available month (BIS data has ~2 month lag)
+        # REER changes slowly, so forward-fill is appropriate for 1-2 months
+        if 'reer' in self.monthly and len(self.monthly['reer']) > 0:
+            reer_m = self.monthly['reer']
+            spot_m = self.monthly.get('ptax', self.monthly.get('spot', pd.Series(dtype=float)))
+            if len(spot_m) > 0:
+                last_spot_date = spot_m.index[-1]
+                last_reer_date = reer_m.index[-1]
+                if last_spot_date > last_reer_date:
+                    extra_dates = spot_m.index[spot_m.index > last_reer_date]
+                    if len(extra_dates) > 0 and len(extra_dates) <= 6:  # Only forward-fill up to 6 months
+                        extra = pd.Series(reer_m.iloc[-1], index=extra_dates)
+                        self.monthly['reer'] = pd.concat([reer_m, extra]).sort_index()
+                        log(f"    reer forward-filled {len(extra_dates)} months beyond {last_reer_date.strftime('%Y-%m')} (value={reer_m.iloc[-1]:.2f})")
+
         # Interpolate annual PPP factor to monthly (linear between years)
         if 'ppp_factor' in self.monthly and len(self.monthly['ppp_factor']) > 2:
             ppp_m = self.monthly['ppp_factor']
             # If data is annual (< 50 points for 30+ years), interpolate
             if len(ppp_m) < 50:
                 ppp_daily = ppp_m.resample('D').interpolate(method='linear')
-                self.monthly['ppp_factor'] = ppp_daily.resample('ME').last().dropna()
+                ppp_interp = ppp_daily.resample('ME').last().dropna()
+                # Forward-fill beyond last annual data point to cover current month
+                # PPP changes slowly (structural), so forward-fill is appropriate
+                spot_m = self.monthly.get('ptax', self.monthly.get('spot', pd.Series(dtype=float)))
+                if len(spot_m) > 0 and len(ppp_interp) > 0:
+                    last_spot_date = spot_m.index[-1]
+                    last_ppp_date = ppp_interp.index[-1]
+                    if last_spot_date > last_ppp_date:
+                        # Extend PPP with forward-fill to match spot dates
+                        extra_dates = spot_m.index[spot_m.index > last_ppp_date]
+                        if len(extra_dates) > 0:
+                            extra = pd.Series(ppp_interp.iloc[-1], index=extra_dates)
+                            ppp_interp = pd.concat([ppp_interp, extra]).sort_index()
+                            log(f"    ppp_factor forward-filled {len(extra_dates)} months beyond {last_ppp_date.strftime('%Y-%m')}")
+                self.monthly['ppp_factor'] = ppp_interp
                 log(f"    ppp_factor interpolated: {len(ppp_m)} → {len(self.monthly['ppp_factor'])} monthly points")
+
+        # Interpolate annual GDP per capita ratio to monthly
+        def _interpolate_annual(key):
+            if key in self.monthly and len(self.monthly[key]) > 2:
+                raw = self.monthly[key]
+                if len(raw) < 50:  # Annual data
+                    daily = raw.resample('D').interpolate(method='linear')
+                    interp = daily.resample('ME').last().dropna()
+                    # Forward-fill to match spot dates
+                    spot_m = self.monthly.get('ptax', self.monthly.get('spot', pd.Series(dtype=float)))
+                    if len(spot_m) > 0 and len(interp) > 0:
+                        last_spot = spot_m.index[-1]
+                        last_data = interp.index[-1]
+                        if last_spot > last_data:
+                            extra = spot_m.index[spot_m.index > last_data]
+                            if len(extra) > 0:
+                                interp = pd.concat([interp, pd.Series(interp.iloc[-1], index=extra)]).sort_index()
+                    self.monthly[key] = interp
+                    log(f"    {key} interpolated: {len(raw)} → {len(interp)} monthly points")
+
+        _interpolate_annual('gdppc_ratio')
+        _interpolate_annual('ca_pct_gdp')
+        _interpolate_annual('trade_openness')
 
         return self
 
@@ -329,11 +427,15 @@ class DataLayer:
         log("\n  Computing instrument returns...")
 
         # --- CDI (cash return) ---
-        selic = self.monthly.get('selic_target', pd.Series(dtype=float))
+        # Use selic_over (BCB 4189, annual % rate) as primary source
+        # selic_target (BCB 11) is a daily rate in decimal, NOT suitable for monthly CDI
+        selic = self.monthly.get('selic_over', pd.Series(dtype=float))
+        if len(selic) == 0:
+            selic = self.monthly.get('selic_target', pd.Series(dtype=float))
         if len(selic) > 0:
-            # Monthly CDI return from annual SELIC rate
+            # Monthly CDI return from annual SELIC rate (% p.a.)
             self.instrument_returns['cash'] = ((1 + selic / 100) ** (1/12)) - 1
-            log(f"    cash (CDI): {len(self.instrument_returns['cash'])} months")
+            log(f"    cash (CDI): {len(self.instrument_returns['cash'])} months, avg={self.instrument_returns['cash'].mean()*100:.3f}% monthly")
 
         # --- FX NDF 1M (long USD) ---
         # ret_fx = spot_return - carry_cost
@@ -394,7 +496,9 @@ class DataLayer:
             # Receiver return: -Δy * duration + carry + rolldown
             # But we need to subtract CDI since this is an overlay
             # Actually, for the overlay, the carry IS the excess carry over CDI
-            selic_m = self.monthly.get('selic_target', pd.Series(dtype=float))
+            selic_m = self.monthly.get('selic_over', pd.Series(dtype=float))
+            if len(selic_m) == 0:
+                selic_m = self.monthly.get('selic_target', pd.Series(dtype=float))
             excess_carry = pd.Series(0.0, index=di_1y.index)
             if len(selic_m) > 0:
                 # Excess carry = (DI_1Y - SELIC) / 12 (annualized spread, monthly)
@@ -470,15 +574,38 @@ class DataLayer:
         return self
 
     def _build_return_df(self):
-        """Build aligned monthly return DataFrame for all instruments."""
+        """Build aligned monthly return DataFrame for all instruments.
+        v2.3.1: Use core instruments (fx, front, belly, long) for alignment.
+        Hard currency (EMBI-based) is optional - fill with 0 if missing.
+        This prevents stale EMBI/CDS data from truncating the entire backtest.
+        """
         instruments = ['fx', 'front', 'belly', 'long', 'hard']
+        core_instruments = ['fx', 'front', 'belly', 'long']  # Must have these
         frames = {}
         for inst in instruments:
             if inst in self.instrument_returns:
                 frames[inst] = self.instrument_returns[inst]
 
         if frames:
-            self.ret_df = pd.DataFrame(frames).dropna()
+            # First build with all instruments
+            full_df = pd.DataFrame(frames)
+            
+            # Align on core instruments only (drop rows where core has NaN)
+            core_cols = [c for c in core_instruments if c in full_df.columns]
+            if core_cols:
+                # Drop rows where ANY core instrument is NaN
+                aligned = full_df.dropna(subset=core_cols)
+                # For non-core instruments (hard), fill NaN with 0 (no position)
+                for col in aligned.columns:
+                    if col not in core_cols:
+                        nan_count = aligned[col].isna().sum()
+                        if nan_count > 0:
+                            log(f"    {col}: {nan_count} NaN months filled with 0 (instrument data ends early)")
+                            aligned[col] = aligned[col].fillna(0)
+                self.ret_df = aligned
+            else:
+                self.ret_df = full_df.dropna()
+
             log(f"\n  Aligned return matrix: {len(self.ret_df)} months x {len(self.ret_df.columns)} instruments")
             log(f"  Period: {self.ret_df.index[0].strftime('%Y-%m')} → {self.ret_df.index[-1].strftime('%Y-%m')}")
 
@@ -608,6 +735,42 @@ class FeatureEngine:
         if len(bop) > 24:
             self.features['Z_bop'] = self._z_score_rolling(bop)
 
+        # ---- v3.7 Additional Variables ----
+
+        # Z_focus_fx (Focus survey USDBRL 12m expectation — sentiment/positioning)
+        focus_fx = m.get('focus_fx_12m', pd.Series(dtype=float))
+        if len(focus_fx) > 24:
+            # Compute surprise: actual spot vs Focus expectation
+            spot_m = m.get('ptax', m.get('spot', pd.Series(dtype=float)))
+            if len(spot_m) > 24:
+                common = focus_fx.index.intersection(spot_m.index)
+                if len(common) > 24:
+                    fx_surprise = (spot_m.reindex(common) - focus_fx.reindex(common)) / focus_fx.reindex(common)
+                    self.features['Z_focus_fx'] = self._z_score_rolling(fx_surprise.dropna())
+                    log(f"    Z_focus_fx: {len(self.features['Z_focus_fx'])} months")
+
+        # Z_cftc_brl (CFTC net speculative positioning — crowding/sentiment)
+        cftc = m.get('cftc_brl_net_spec', pd.Series(dtype=float))
+        if len(cftc) > 24:
+            self.features['Z_cftc_brl'] = self._z_score_rolling(cftc)
+            log(f"    Z_cftc_brl: {len(self.features['Z_cftc_brl'])} months")
+
+        # Z_idp_flow (IDP — foreign direct investment, structural flow)
+        idp = m.get('idp_flow', pd.Series(dtype=float))
+        if len(idp) > 24:
+            # Use 12m rolling sum for smoother signal
+            idp_12m = idp.rolling(12, min_periods=6).sum()
+            self.features['Z_idp_flow'] = self._z_score_rolling(idp_12m.dropna())
+            log(f"    Z_idp_flow: {len(self.features['Z_idp_flow'])} months")
+
+        # Z_portfolio_flow (portfolio flows — hot money, risk appetite)
+        port_flow = m.get('portfolio_flow', pd.Series(dtype=float))
+        if len(port_flow) > 24:
+            # Use 6m rolling sum for more responsive signal
+            port_6m = port_flow.rolling(6, min_periods=3).sum()
+            self.features['Z_portfolio_flow'] = self._z_score_rolling(port_6m.dropna())
+            log(f"    Z_portfolio_flow: {len(self.features['Z_portfolio_flow'])} months")
+
         for k, v in self.features.items():
             log(f"    {k:25s}: {len(v)} months")
 
@@ -650,69 +813,128 @@ class FeatureEngine:
             beta_cyc = self.cfg.get('fx_cyclical_beta', 0.05)
             fv_components['cyc'] = spot_m.reindex(common) * np.exp(-beta_cyc * z_real_diff.reindex(common))
 
+        # --- Balassa-Samuelson adjusted PPP ---
+        # PPP_BS = PPP_raw * (GDP_pc_US / GDP_pc_BR)^beta
+        # beta = 0.35 (cross-section Penn effect elasticity for EM, literature standard)
+        gdppc_ratio = self.dl.monthly.get('gdppc_ratio', pd.Series(dtype=float))
+        if len(ppp) > 24 and len(gdppc_ratio) > 10:
+            common_bs = ppp.index.intersection(gdppc_ratio.index).intersection(spot_m.index)
+            if len(common_bs) > 12:
+                bs_beta = self.cfg.get('bs_beta', 0.35)
+                prod_ratio = (1.0 / gdppc_ratio.reindex(common_bs))  # US/BR ratio
+                ppp_bs = ppp.reindex(common_bs) * (prod_ratio ** bs_beta)
+                fv_components['ppp_bs'] = ppp_bs
+                log(f"    ppp_bs (Balassa-Samuelson): {len(ppp_bs)} months, beta={bs_beta}, last={ppp_bs.iloc[-1]:.4f}")
+
+        # --- FEER (Fundamental Equilibrium Exchange Rate) ---
+        # FEER = spot * (1 + (CA_target - CA_actual) / (elasticity * trade_openness))
+        ca_pct = self.dl.monthly.get('ca_pct_gdp', pd.Series(dtype=float))
+        trade_open = self.dl.monthly.get('trade_openness', pd.Series(dtype=float))
+        if len(ca_pct) > 10 and len(trade_open) > 10:
+            ca_target = self.cfg.get('feer_ca_target', -2.0)  # % of GDP (sustainable)
+            feer_elasticity = self.cfg.get('feer_elasticity', 0.7)  # Marshall-Lerner
+            common_feer = spot_m.index.intersection(ca_pct.index).intersection(trade_open.index)
+            if len(common_feer) > 12:
+                ca_gap = (ca_pct.reindex(common_feer) - ca_target) / 100.0
+                trade_frac = trade_open.reindex(common_feer) / 100.0
+                reer_adj = -ca_gap / (feer_elasticity * trade_frac)
+                feer = spot_m.reindex(common_feer) * (1 + reer_adj)
+                fv_components['feer'] = feer
+                log(f"    feer: {len(feer)} months, CA_target={ca_target}%, elasticity={feer_elasticity}, last={feer.iloc[-1]:.4f}")
+
         if not fv_components:
             log("    No fair value components available")
             return
 
-        # Combine in log-space: log(FV) = Σ w_i * log(FV_i)
-        weights = self.cfg.get('fx_fv_weights', {'ppp': 0.4, 'beer': 0.4, 'cyc': 0.2})
-        common_idx = spot_m.index
-        for comp in fv_components.values():
-            common_idx = common_idx.intersection(comp.index)
+        # Store each component's timeseries with its OWN index (not truncated to intersection)
+        # This prevents BEER from being flat when PPP data ends earlier
+        if 'ppp' in fv_components:
+            ppp_vals = fv_components['ppp']
+            valid_ppp = ppp_vals[ppp_vals > 0]
+            self._ppp_fair = float(valid_ppp.iloc[-1]) if len(valid_ppp) > 0 else 0
+            self.features['ppp_fair_ts'] = ppp_vals
+            log(f"    ppp_fair_ts: {len(ppp_vals)} months, last={ppp_vals.iloc[-1]:.4f}")
+        else:
+            self._ppp_fair = 0
 
-        if len(common_idx) < 24:
-            log(f"    Insufficient common dates: {len(common_idx)}")
+        if 'ppp_bs' in fv_components:
+            ppp_bs_vals = fv_components['ppp_bs']
+            valid_ppp_bs = ppp_bs_vals[ppp_bs_vals > 0]
+            self._ppp_bs_fair = float(valid_ppp_bs.iloc[-1]) if len(valid_ppp_bs) > 0 else 0
+            self.features['ppp_bs_fair_ts'] = ppp_bs_vals
+            log(f"    ppp_bs_fair_ts: {len(ppp_bs_vals)} months, last={ppp_bs_vals.iloc[-1]:.4f}")
+        else:
+            self._ppp_bs_fair = 0
+
+        if 'feer' in fv_components:
+            feer_vals = fv_components['feer']
+            valid_feer = feer_vals[feer_vals > 0]
+            self._feer_fair = float(valid_feer.iloc[-1]) if len(valid_feer) > 0 else 0
+            self.features['feer_fair_ts'] = feer_vals
+            log(f"    feer_fair_ts: {len(feer_vals)} months, last={feer_vals.iloc[-1]:.4f}")
+        else:
+            self._feer_fair = 0
+
+        if 'beer' in fv_components:
+            beer_vals = fv_components['beer']
+            valid_beer = beer_vals[beer_vals > 0]
+            self._beer_fair = float(valid_beer.iloc[-1]) if len(valid_beer) > 0 else 0
+            self.features['beer_fair_ts'] = beer_vals
+            log(f"    beer_fair_ts: {len(beer_vals)} months, last={beer_vals.iloc[-1]:.4f}")
+        else:
+            self._beer_fair = 0
+
+        # Combine in log-space using UNION of dates (not intersection)
+        # For each date, use whichever components are available with re-normalized weights
+        weights = self.cfg.get('fx_fv_weights', {'beer': 1.0})
+
+        # Build union of all component dates that also exist in spot
+        all_dates = pd.DatetimeIndex([])
+        for comp in fv_components.values():
+            all_dates = all_dates.union(comp.index)
+        union_idx = spot_m.index.intersection(all_dates).sort_values()
+
+        if len(union_idx) < 24:
+            log(f"    Insufficient union dates: {len(union_idx)}")
             return
 
-        log_fv = pd.Series(0.0, index=common_idx)
-        total_w = 0
-        for name, comp in fv_components.items():
-            w = weights.get(name, 0.2)
-            vals = comp.reindex(common_idx)
-            valid = vals > 0
-            if valid.sum() > 0:
-                log_fv[valid] += w * np.log(vals[valid])
-                total_w += w
-
-        if total_w > 0:
-            log_fv /= total_w
-            fx_fair = np.exp(log_fv)
-            self.features['fx_fair'] = fx_fair
-
-            # Valuation signal: val_fx = log(FX_fair / spot)
-            # Positive → USD is cheap → expected appreciation of USD
-            # Negative → USD is expensive → expected depreciation of USD
-            val_fx = np.log(fx_fair / spot_m.reindex(common_idx))
-            self.features['val_fx'] = val_fx
-
-            # Half-life mean reversion signal
-            hl = self.cfg['valuation_half_life_months']['fx']
-            k_fx = math.log(2) / hl
-            mu_fx_val = k_fx * val_fx
-            self.features['mu_fx_val'] = mu_fx_val
-
-            # Store latest fair values as attributes for dashboard
-            self._fx_fair = float(fx_fair.iloc[-1])
-            # Store full timeseries for charts
-            self.features['fx_fair_ts'] = fx_fair
-            if 'ppp' in fv_components:
-                ppp_vals = fv_components['ppp'].reindex(common_idx)
-                valid_ppp = ppp_vals[ppp_vals > 0]
-                self._ppp_fair = float(valid_ppp.iloc[-1]) if len(valid_ppp) > 0 else 0
-                self.features['ppp_fair_ts'] = ppp_vals
+        # For each date, compute weighted log-FV using available components
+        fx_fair_vals = []
+        for dt in union_idx:
+            log_fv = 0.0
+            total_w = 0.0
+            for name, comp in fv_components.items():
+                if dt in comp.index:
+                    val = comp.loc[dt]
+                    if val > 0:
+                        w = weights.get(name, 0.0)  # Only include components with explicit weights
+                        log_fv += w * np.log(val)
+                        total_w += w
+            if total_w > 0:
+                fx_fair_vals.append(np.exp(log_fv / total_w))
             else:
-                self._ppp_fair = 0
-            if 'beer' in fv_components:
-                beer_vals = fv_components['beer'].reindex(common_idx)
-                valid_beer = beer_vals[beer_vals > 0]
-                self._beer_fair = float(valid_beer.iloc[-1]) if len(valid_beer) > 0 else 0
-                self.features['beer_fair_ts'] = beer_vals
-            else:
-                self._beer_fair = 0
+                fx_fair_vals.append(np.nan)
 
-            log(f"    fx_fair: {len(fx_fair)} months, current={fx_fair.iloc[-1]:.4f}")
-            log(f"    val_fx: mean={val_fx.mean():.4f}, current={val_fx.iloc[-1]:.4f}")
-            log(f"    mu_fx_val: mean={mu_fx_val.mean()*100:.2f}%, current={mu_fx_val.iloc[-1]*100:.2f}%")
+        fx_fair = pd.Series(fx_fair_vals, index=union_idx).dropna()
+        self.features['fx_fair'] = fx_fair
+
+        # Valuation signal: val_fx = log(FX_fair / spot)
+        val_fx = np.log(fx_fair / spot_m.reindex(fx_fair.index))
+        self.features['val_fx'] = val_fx
+
+        # Half-life mean reversion signal
+        hl = self.cfg['valuation_half_life_months']['fx']
+        k_fx = math.log(2) / hl
+        mu_fx_val = k_fx * val_fx
+        self.features['mu_fx_val'] = mu_fx_val
+
+        # Store latest fair values
+        self._fx_fair = float(fx_fair.iloc[-1])
+        self.features['fx_fair_ts'] = fx_fair
+
+        log(f"    fx_fair: {len(fx_fair)} months, current={fx_fair.iloc[-1]:.4f}")
+        log(f"    val_fx: mean={val_fx.mean():.4f}, current={val_fx.iloc[-1]:.4f}")
+        log(f"    mu_fx_val: mean={mu_fx_val.mean()*100:.2f}%, current={mu_fx_val.iloc[-1]*100:.2f}%")
 
     def _build_carry(self):
         """Build carry features for each instrument."""
@@ -734,7 +956,9 @@ class FeatureEngine:
             log(f"    carry_fx: {len(carry_fx)} months, mean={carry_fx.mean()*100:.3f}%/m")
 
         # Rates carry: excess carry over CDI for each bucket
-        selic = m.get('selic_target', pd.Series(dtype=float))
+        selic = m.get('selic_over', pd.Series(dtype=float))
+        if len(selic) == 0:
+            selic = m.get('selic_target', pd.Series(dtype=float))
         for bucket, tenor_key in [('front', 'di_1y'), ('belly', 'di_5y'), ('long', 'di_10y')]:
             di = m.get(tenor_key, pd.Series(dtype=float))
             if len(di) > 12 and len(selic) > 12:
@@ -898,7 +1122,9 @@ class FeatureEngine:
         di_1y = m.get('di_1y', pd.Series(dtype=float))
         di_5y = m.get('di_5y', pd.Series(dtype=float))
         di_10y = m.get('di_10y', pd.Series(dtype=float))
-        selic = m.get('selic_target', pd.Series(dtype=float))
+        selic = m.get('selic_over', pd.Series(dtype=float))
+        if len(selic) == 0:
+            selic = m.get('selic_target', pd.Series(dtype=float))
 
         if all(len(s) > 24 for s in [di_1y, di_5y, di_10y, selic]):
             common = di_1y.index.intersection(di_5y.index).intersection(di_10y.index).intersection(selic.index)
@@ -1022,7 +1248,9 @@ class FeatureEngine:
         """
         log("\n  Building Taylor Rule rates equilibrium...")
         m = self.dl.monthly
-        selic = m.get('selic_target', pd.Series(dtype=float))
+        selic = m.get('selic_over', pd.Series(dtype=float))
+        if len(selic) == 0:
+            selic = m.get('selic_target', pd.Series(dtype=float))
         ipca_12m = m.get('ipca_yoy', pd.Series(dtype=float))  # DataLayer key is 'ipca_yoy'
         ipca_exp = m.get('ipca_exp', pd.Series(dtype=float))
         ibc_br = m.get('ibc_br', pd.Series(dtype=float))
@@ -1167,15 +1395,19 @@ class AlphaModels:
 
     FEATURE_MAP = {
         'fx':    ['Z_dxy', 'Z_vix', 'Z_cds_br', 'Z_real_diff', 'Z_tot', 'mu_fx_val', 'carry_fx',
-                  'Z_cip_basis', 'Z_beer', 'Z_reer_gap', 'Z_hy_spread', 'Z_ewz', 'Z_iron_ore', 'Z_bop'],
+                  'Z_cip_basis', 'Z_beer', 'Z_reer_gap', 'Z_hy_spread', 'Z_ewz', 'Z_iron_ore', 'Z_bop',
+                  'Z_focus_fx', 'Z_cftc_brl', 'Z_idp_flow', 'Z_portfolio_flow'],  # v3.7: +4 new features
         'front': ['Z_real_diff', 'Z_infl_surprise', 'Z_fiscal', 'carry_front',
-                  'Z_term_premium', 'Z_us_real_yield', 'Z_pb_momentum'],
+                  'Z_term_premium', 'Z_us_real_yield', 'Z_pb_momentum', 'Z_portfolio_flow'],
         'belly': ['Z_real_diff', 'Z_fiscal', 'Z_cds_br', 'Z_dxy', 'carry_belly',
-                  'Z_term_premium', 'Z_tp_5y', 'Z_us_real_yield', 'Z_fiscal_premium', 'Z_us_breakeven'],
+                  'Z_term_premium', 'Z_tp_5y', 'Z_us_real_yield', 'Z_fiscal_premium', 'Z_us_breakeven',
+                  'Z_portfolio_flow'],
         'long':  ['Z_fiscal', 'Z_dxy', 'Z_vix', 'Z_cds_br', 'carry_long',
-                  'Z_term_premium', 'Z_fiscal_premium', 'Z_debt_accel', 'Z_us_real_yield'],
+                  'Z_term_premium', 'Z_fiscal_premium', 'Z_debt_accel', 'Z_us_real_yield',
+                  'Z_portfolio_flow'],
         'hard':  ['Z_vix', 'Z_cds_br', 'Z_fiscal', 'Z_dxy', 'carry_hard',
-                  'Z_hy_spread', 'Z_us_real_yield', 'Z_ewz', 'Z_us_breakeven'],
+                  'Z_hy_spread', 'Z_us_real_yield', 'Z_ewz', 'Z_us_breakeven',
+                  'Z_cftc_brl', 'Z_portfolio_flow'],
     }
 
     def __init__(self, data_layer, feature_engine, config=None):
@@ -1220,11 +1452,14 @@ class AlphaModels:
             y = y.reindex(X.index)
 
             # Use training window
-            if len(y) > window:
+            # v3.8: Expanding vs fixed rolling window
+            expanding = self.cfg.get('expanding_window', False)
+            min_train = self.cfg.get('min_training_months', 60)
+            if not expanding and len(y) > window:
                 y = y.iloc[-window:]
                 X = X.iloc[-window:]
 
-            if len(y) < 36:
+            if len(y) < min(min_train, 36):
                 continue
 
             # Winsorize
@@ -1263,25 +1498,27 @@ class AlphaModels:
 
 class EnsembleAlphaModels:
     """
-    Ensemble of Ridge + GradientBoosting with adaptive weights.
+    v3.7: Expanded ensemble of Ridge + GBM + RandomForest + XGBoost with adaptive weights.
     Each model is fit walk-forward per instrument. Ensemble weights are
-    proportional to rolling OOS R² (exponentially weighted, 24m halflife).
+    proportional to rolling OOS weighted correlation (exponentially weighted, 24m halflife).
     """
     FEATURE_MAP = AlphaModels.FEATURE_MAP
+    MODEL_NAMES = ['ridge', 'gbm', 'rf', 'xgb']  # v3.7: 4 models
 
     def __init__(self, data_layer, feature_engine, config=None):
         self.dl = data_layer
         self.fe = feature_engine
         self.cfg = config or DEFAULT_CONFIG
-        self.models = {}  # {instrument: {'ridge': model, 'gbm': model}}
+        self.models = {}  # {instrument: {model_name: model}}
         self.predictions = {}  # {instrument: mu}
-        self.model_predictions = {}  # {instrument: {'ridge': mu, 'gbm': mu, 'ensemble': mu}}
-        self.oos_history = {}  # {instrument: {'ridge': [(pred, real)], 'gbm': [(pred, real)]}}
-        self.ensemble_weights = {}  # {instrument: {'ridge': w, 'gbm': w}}
+        self.model_predictions = {}  # {instrument: {model_name: mu, 'ensemble': mu, 'w_*': w}}
+        self.oos_history = {}  # {instrument: {model_name: [(pred, real)]}}
+        self.ensemble_weights = {}  # {instrument: {model_name: w}}
+        self.hp_cache = {}  # v3.7: {instrument: {model_params}} from purged k-fold CV
 
     def fit_and_predict(self, asof_date):
         """
-        Fit Ridge + GBM per instrument, combine with adaptive weights.
+        Fit Ridge + GBM + RF + XGBoost per instrument, combine with adaptive weights.
         Returns dict of {instrument: ensemble_mu}.
         """
         window = self.cfg['training_window_months']
@@ -1311,11 +1548,14 @@ class EnsembleAlphaModels:
             X = X.reindex(y.index).dropna()
             y = y.reindex(X.index)
 
-            if len(y) > window:
+            # v3.8: Expanding vs fixed rolling window
+            expanding = self.cfg.get('expanding_window', False)
+            min_train = self.cfg.get('min_training_months', 60)
+            if not expanding and len(y) > window:
                 y = y.iloc[-window:]
                 X = X.iloc[-window:]
 
-            if len(y) < 36:
+            if len(y) < min(min_train, 36):
                 continue
 
             # Winsorize
@@ -1333,9 +1573,13 @@ class EnsembleAlphaModels:
 
             inst_preds = {}
 
+            # v3.7: Use CV-optimized hyperparameters if available
+            hp = self.hp_cache.get(inst, {})
+
             # --- Ridge ---
             try:
-                ridge = Ridge(alpha=ridge_lambda, fit_intercept=True)
+                ridge_alpha = hp.get('ridge_alpha', ridge_lambda)
+                ridge = Ridge(alpha=ridge_alpha, fit_intercept=True)
                 ridge.fit(X_w.values, y_w.values)
                 mu_ridge = float(ridge.predict(X_pred)[0])
                 inst_preds['ridge'] = mu_ridge
@@ -1344,31 +1588,58 @@ class EnsembleAlphaModels:
 
             # --- GradientBoosting ---
             try:
-                gbm = GradientBoostingRegressor(
-                    n_estimators=100,
-                    max_depth=3,
-                    learning_rate=0.05,
-                    subsample=0.8,
-                    min_samples_leaf=5,
-                    random_state=42,
-                )
+                gbm_params = hp.get('gbm', {
+                    'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05,
+                    'subsample': 0.8, 'min_samples_leaf': 5, 'random_state': 42,
+                })
+                gbm = GradientBoostingRegressor(**gbm_params)
                 gbm.fit(X_w.values, y_w.values)
                 mu_gbm = float(gbm.predict(X_pred)[0])
                 inst_preds['gbm'] = mu_gbm
             except Exception:
                 inst_preds['gbm'] = 0.0
 
-            # --- Adaptive Ensemble Weights ---
-            w_ridge, w_gbm = self._compute_ensemble_weights(inst)
-            mu_ensemble = w_ridge * inst_preds.get('ridge', 0) + w_gbm * inst_preds.get('gbm', 0)
+            # --- v3.7: Random Forest ---
+            try:
+                rf_params = hp.get('rf', {
+                    'n_estimators': 200, 'max_depth': 4, 'min_samples_leaf': 5,
+                    'max_features': 'sqrt', 'random_state': 42, 'n_jobs': 1,
+                })
+                rf = RandomForestRegressor(**rf_params)
+                rf.fit(X_w.values, y_w.values)
+                mu_rf = float(rf.predict(X_pred)[0])
+                inst_preds['rf'] = mu_rf
+            except Exception:
+                inst_preds['rf'] = 0.0
+
+            # --- v3.7: XGBoost ---
+            try:
+                xgb_params = hp.get('xgb', {
+                    'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05,
+                    'subsample': 0.8, 'colsample_bytree': 0.8, 'min_child_weight': 5,
+                    'reg_alpha': 0.1, 'reg_lambda': 1.0, 'random_state': 42, 'verbosity': 0,
+                })
+                xgb_model = xgb.XGBRegressor(**xgb_params)
+                xgb_model.fit(X_w.values, y_w.values)
+                mu_xgb = float(xgb_model.predict(X_pred)[0])
+                inst_preds['xgb'] = mu_xgb
+            except Exception:
+                inst_preds['xgb'] = 0.0
+
+            # --- Adaptive Ensemble Weights (4 models) ---
+            weights = self._compute_ensemble_weights(inst)
+            mu_ensemble = sum(weights.get(m, 0.25) * inst_preds.get(m, 0) for m in self.MODEL_NAMES)
 
             predictions[inst] = mu_ensemble
             inst_preds['ensemble'] = mu_ensemble
-            inst_preds['w_ridge'] = w_ridge
-            inst_preds['w_gbm'] = w_gbm
+            for m in self.MODEL_NAMES:
+                inst_preds[f'w_{m}'] = weights.get(m, 0.25)
+            # Backward compat: keep w_ridge, w_gbm at top level
+            inst_preds['w_ridge'] = weights.get('ridge', 0.25)
+            inst_preds['w_gbm'] = weights.get('gbm', 0.25)
             model_preds[inst] = inst_preds
 
-            self.models[inst] = {'ridge_fitted': True, 'gbm_fitted': True}
+            self.models[inst] = {f'{m}_fitted': True for m in self.MODEL_NAMES}
 
         self.predictions = predictions
         self.model_predictions = model_preds
@@ -1376,17 +1647,21 @@ class EnsembleAlphaModels:
 
     def _compute_ensemble_weights(self, instrument):
         """
-        Compute adaptive weights based on rolling OOS R² with exponential decay.
-        Halflife = 24 months.
+        v3.7: Compute adaptive weights for 4 models based on rolling OOS
+        weighted correlation with exponential decay (halflife 24m).
+        Returns dict {model_name: weight}.
         """
+        n_models = len(self.MODEL_NAMES)
+        equal_w = {m: 1.0 / n_models for m in self.MODEL_NAMES}
+
         if instrument not in self.oos_history:
-            return 0.5, 0.5  # equal weight initially
+            return equal_w
 
         hist = self.oos_history[instrument]
         min_obs = 12
 
         scores = {}
-        for model_name in ['ridge', 'gbm']:
+        for model_name in self.MODEL_NAMES:
             if model_name not in hist or len(hist[model_name]) < min_obs:
                 scores[model_name] = 0.0
                 continue
@@ -1401,7 +1676,6 @@ class EnsembleAlphaModels:
 
             # Weighted correlation as proxy for OOS quality
             if np.std(preds) > 1e-8 and np.std(reals) > 1e-8:
-                # Weighted mean
                 w_sum = decay.sum()
                 mean_p = np.sum(decay * preds) / w_sum
                 mean_r = np.sum(decay * reals) / w_sum
@@ -1417,12 +1691,9 @@ class EnsembleAlphaModels:
 
         total = sum(scores.values())
         if total > 0:
-            w_ridge = scores.get('ridge', 0) / total
-            w_gbm = scores.get('gbm', 0) / total
+            return {m: scores.get(m, 0) / total for m in self.MODEL_NAMES}
         else:
-            w_ridge, w_gbm = 0.5, 0.5
-
-        return w_ridge, w_gbm
+            return equal_w
 
     def update_oos_history(self, instrument, model_name, prediction, realized):
         """Track OOS predictions for adaptive weight computation."""
@@ -1434,6 +1705,272 @@ class EnsembleAlphaModels:
 
     def compute_ic_rolling(self, instrument, window=36):
         pass
+
+    @staticmethod
+    def purged_kfold_cv(X, y, n_splits=5, purge_gap=3, model_class=Ridge, model_params=None):
+        """
+        v3.7: Purged k-fold cross-validation for time series.
+        Prevents look-ahead bias by:
+        1. Splitting data into k chronological folds
+        2. Purging `purge_gap` observations between train and test sets
+        3. Never using future data to train
+
+        Returns mean OOS R² across folds.
+        """
+        n = len(y)
+        fold_size = n // n_splits
+        if fold_size < 12:
+            return 0.0  # too few observations per fold
+
+        scores = []
+        for i in range(n_splits):
+            test_start = i * fold_size
+            test_end = min((i + 1) * fold_size, n)
+
+            # Train on everything BEFORE the test fold (with purge gap)
+            train_end = max(0, test_start - purge_gap)
+            if train_end < 24:  # need minimum training data
+                continue
+
+            X_train = X[:train_end]
+            y_train = y[:train_end]
+            X_test = X[test_start:test_end]
+            y_test = y[test_start:test_end]
+
+            if len(X_train) < 24 or len(X_test) < 6:
+                continue
+
+            try:
+                params = model_params or {}
+                model = model_class(**params)
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+
+                # OOS R²
+                ss_res = np.sum((y_test - y_pred) ** 2)
+                ss_tot = np.sum((y_test - np.mean(y_test)) ** 2)
+                r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+                scores.append(r2)
+            except Exception:
+                continue
+
+        return float(np.mean(scores)) if scores else 0.0
+
+    def select_hyperparameters(self, X, y, inst):
+        """
+        v3.7: Use purged k-fold CV to select optimal hyperparameters.
+        Returns dict of optimal params for each model type.
+        Called periodically (every 12 months) during walk-forward.
+        """
+        best_params = {}
+
+        # Ridge: select alpha
+        ridge_alphas = [1.0, 5.0, 10.0, 20.0, 50.0]
+        best_ridge_score = -np.inf
+        best_ridge_alpha = 10.0
+        for alpha in ridge_alphas:
+            score = self.purged_kfold_cv(
+                X, y, n_splits=5, purge_gap=3,
+                model_class=Ridge, model_params={'alpha': alpha, 'fit_intercept': True}
+            )
+            if score > best_ridge_score:
+                best_ridge_score = score
+                best_ridge_alpha = alpha
+        best_params['ridge_alpha'] = best_ridge_alpha
+
+        # GBM: select n_estimators and max_depth
+        gbm_configs = [
+            {'n_estimators': 50, 'max_depth': 2, 'learning_rate': 0.05, 'subsample': 0.8, 'min_samples_leaf': 5, 'random_state': 42},
+            {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05, 'subsample': 0.8, 'min_samples_leaf': 5, 'random_state': 42},
+            {'n_estimators': 100, 'max_depth': 2, 'learning_rate': 0.03, 'subsample': 0.8, 'min_samples_leaf': 5, 'random_state': 42},
+            {'n_estimators': 150, 'max_depth': 3, 'learning_rate': 0.03, 'subsample': 0.7, 'min_samples_leaf': 5, 'random_state': 42},
+        ]
+        best_gbm_score = -np.inf
+        best_gbm_cfg = gbm_configs[1]  # default
+        for cfg in gbm_configs:
+            score = self.purged_kfold_cv(
+                X, y, n_splits=5, purge_gap=3,
+                model_class=GradientBoostingRegressor, model_params=cfg
+            )
+            if score > best_gbm_score:
+                best_gbm_score = score
+                best_gbm_cfg = cfg
+        best_params['gbm'] = best_gbm_cfg
+
+        # RF: select n_estimators and max_depth
+        rf_configs = [
+            {'n_estimators': 100, 'max_depth': 3, 'min_samples_leaf': 5, 'max_features': 'sqrt', 'random_state': 42, 'n_jobs': 1},
+            {'n_estimators': 200, 'max_depth': 4, 'min_samples_leaf': 5, 'max_features': 'sqrt', 'random_state': 42, 'n_jobs': 1},
+            {'n_estimators': 200, 'max_depth': 3, 'min_samples_leaf': 3, 'max_features': 'sqrt', 'random_state': 42, 'n_jobs': 1},
+            {'n_estimators': 300, 'max_depth': 5, 'min_samples_leaf': 5, 'max_features': 'sqrt', 'random_state': 42, 'n_jobs': 1},
+        ]
+        best_rf_score = -np.inf
+        best_rf_cfg = rf_configs[1]  # default
+        for cfg in rf_configs:
+            score = self.purged_kfold_cv(
+                X, y, n_splits=5, purge_gap=3,
+                model_class=RandomForestRegressor, model_params=cfg
+            )
+            if score > best_rf_score:
+                best_rf_score = score
+                best_rf_cfg = cfg
+        best_params['rf'] = best_rf_cfg
+
+        # XGBoost: select params
+        xgb_configs = [
+            {'n_estimators': 50, 'max_depth': 2, 'learning_rate': 0.05, 'subsample': 0.8, 'colsample_bytree': 0.8, 'min_child_weight': 5, 'reg_alpha': 0.1, 'reg_lambda': 1.0, 'random_state': 42, 'verbosity': 0},
+            {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05, 'subsample': 0.8, 'colsample_bytree': 0.8, 'min_child_weight': 5, 'reg_alpha': 0.1, 'reg_lambda': 1.0, 'random_state': 42, 'verbosity': 0},
+            {'n_estimators': 100, 'max_depth': 2, 'learning_rate': 0.03, 'subsample': 0.7, 'colsample_bytree': 0.7, 'min_child_weight': 3, 'reg_alpha': 0.5, 'reg_lambda': 2.0, 'random_state': 42, 'verbosity': 0},
+            {'n_estimators': 150, 'max_depth': 3, 'learning_rate': 0.03, 'subsample': 0.8, 'colsample_bytree': 0.8, 'min_child_weight': 5, 'reg_alpha': 0.1, 'reg_lambda': 1.5, 'random_state': 42, 'verbosity': 0},
+        ]
+        best_xgb_score = -np.inf
+        best_xgb_cfg = xgb_configs[1]  # default
+        for cfg in xgb_configs:
+            score = self.purged_kfold_cv(
+                X, y, n_splits=5, purge_gap=3,
+                model_class=xgb.XGBRegressor, model_params=cfg
+            )
+            if score > best_xgb_score:
+                best_xgb_score = score
+                best_xgb_cfg = cfg
+        best_params['xgb'] = best_xgb_cfg
+
+        log(f"    [{inst}] CV scores: Ridge(a={best_ridge_alpha})={best_ridge_score:.3f}, "
+            f"GBM={best_gbm_score:.3f}, RF={best_rf_score:.3f}, XGB={best_xgb_score:.3f}")
+
+        return best_params
+
+    def compute_shap_importance(self, asof_date):
+        """
+        v3.8: Compute SHAP feature importance for each instrument using the
+        latest fitted XGBoost and RF models. Returns dict of:
+        {instrument: {feature_name: shap_value, ...}}
+        """
+        ret_df = self.dl.ret_df
+        feat_df = self.fe.feature_df
+        if ret_df is None or feat_df is None:
+            return {}
+
+        importance = {}
+        for inst, feat_names in self.FEATURE_MAP.items():
+            if inst not in ret_df.columns:
+                continue
+            available_feats = [f for f in feat_names if f in feat_df.columns]
+            if len(available_feats) < 2:
+                continue
+
+            y = ret_df[inst].loc[:asof_date]
+            X = feat_df[available_feats].loc[:asof_date]
+            common = y.index.intersection(X.index)
+            y = y.reindex(common).dropna()
+            X = X.reindex(y.index).dropna()
+            y = y.reindex(X.index)
+
+            expanding = self.cfg.get('expanding_window', False)
+            window = self.cfg['training_window_months']
+            if not expanding and len(y) > window:
+                y = y.iloc[-window:]
+                X = X.iloc[-window:]
+
+            if len(y) < 36:
+                continue
+
+            try:
+                # Fit XGBoost for SHAP (tree-based SHAP is fast and exact)
+                xgb_model = xgb.XGBRegressor(
+                    n_estimators=100, max_depth=3, learning_rate=0.05,
+                    subsample=0.8, colsample_bytree=0.8, verbosity=0, random_state=42
+                )
+                xgb_model.fit(X.values, y.values)
+
+                # Compute SHAP values
+                explainer = shap.TreeExplainer(xgb_model)
+                shap_values = explainer.shap_values(X.values)
+
+                # Mean absolute SHAP value per feature (global importance)
+                mean_abs_shap = np.abs(shap_values).mean(axis=0)
+
+                # Current SHAP (for the latest observation)
+                latest_feat = self.fe.get_features_at(asof_date, available_feats)
+                if latest_feat is not None and not latest_feat.isna().all():
+                    latest_X = latest_feat.values.reshape(1, -1)
+                    current_shap = explainer.shap_values(latest_X)[0]
+                else:
+                    current_shap = shap_values[-1]  # use last training observation
+
+                inst_importance = {}
+                for j, feat in enumerate(available_feats):
+                    inst_importance[feat] = {
+                        'mean_abs': round(float(mean_abs_shap[j]), 6),
+                        'current': round(float(current_shap[j]), 6),
+                        'rank': 0  # will be filled below
+                    }
+
+                # Rank by mean absolute SHAP
+                sorted_feats = sorted(inst_importance.items(), key=lambda x: x[1]['mean_abs'], reverse=True)
+                for rank, (feat, vals) in enumerate(sorted_feats, 1):
+                    inst_importance[feat]['rank'] = rank
+
+                importance[inst] = inst_importance
+            except Exception as e:
+                log(f"    SHAP failed for {inst}: {e}")
+                continue
+
+        return importance
+
+    def compute_shap_snapshot(self, asof_date):
+        """
+        v3.9: Lightweight SHAP snapshot for historical tracking.
+        Returns dict of {instrument: {feature: mean_abs_shap}} at a given date.
+        Uses smaller n_estimators for speed since this runs many times during backtest.
+        """
+        ret_df = self.dl.ret_df
+        feat_df = self.fe.feature_df
+        if ret_df is None or feat_df is None:
+            return {}
+
+        snapshot = {}
+        for inst, feat_names in self.FEATURE_MAP.items():
+            if inst not in ret_df.columns:
+                continue
+            available_feats = [f for f in feat_names if f in feat_df.columns]
+            if len(available_feats) < 2:
+                continue
+
+            y = ret_df[inst].loc[:asof_date]
+            X = feat_df[available_feats].loc[:asof_date]
+            common = y.index.intersection(X.index)
+            y = y.reindex(common).dropna()
+            X = X.reindex(y.index).dropna()
+            y = y.reindex(X.index)
+
+            expanding = self.cfg.get('expanding_window', False)
+            window = self.cfg['training_window_months']
+            if not expanding and len(y) > window:
+                y = y.iloc[-window:]
+                X = X.iloc[-window:]
+
+            if len(y) < 36:
+                continue
+
+            try:
+                xgb_model = xgb.XGBRegressor(
+                    n_estimators=50, max_depth=3, learning_rate=0.05,
+                    subsample=0.8, colsample_bytree=0.8, verbosity=0, random_state=42
+                )
+                xgb_model.fit(X.values, y.values)
+                explainer = shap.TreeExplainer(xgb_model)
+                shap_values = explainer.shap_values(X.values)
+                mean_abs_shap = np.abs(shap_values).mean(axis=0)
+
+                inst_snap = {}
+                for j, feat in enumerate(available_feats):
+                    inst_snap[feat] = round(float(mean_abs_shap[j]), 6)
+                snapshot[inst] = inst_snap
+            except Exception:
+                continue
+
+        return snapshot
 
 
 # ============================================================
@@ -1728,6 +2265,17 @@ class Optimizer:
         tc_bps = self.cfg['transaction_costs_bps']
         turnover_pen = self.cfg['turnover_penalty_bps'] / 10000
 
+        # v3.8: Regime-dependent transaction cost multiplier
+        tc_mult = 1.0
+        tc_regime_mults = self.cfg.get('tc_regime_multipliers', {})
+        if regime_probs:
+            # Weighted average of regime multipliers by probability
+            tc_mult = sum(
+                regime_probs.get(regime, 0) * tc_regime_mults.get(regime, 1.0)
+                for regime in tc_regime_mults
+            )
+            tc_mult = max(tc_mult, 0.5)  # floor at 0.5x
+
         # Dynamic risk budgets by IC
         budget_scale = np.ones(n)
         if ic_scores and len(ic_scores) >= 3:
@@ -1743,8 +2291,8 @@ class Optimizer:
         def objective(p):
             ret = np.dot(mu_vec * budget_scale, p)
             risk = 0.5 * gamma * np.dot(p, np.dot(cov_mat, p))
-            tc = sum(tc_bps.get(instruments[i], 5) / 10000 * abs(p[i] - prev_vec[i]) for i in range(n))
-            turnover = turnover_pen * np.sum(np.abs(p - prev_vec))
+            tc = sum(tc_bps.get(instruments[i], 5) / 10000 * tc_mult * abs(p[i] - prev_vec[i]) for i in range(n))
+            turnover = turnover_pen * tc_mult * np.sum(np.abs(p - prev_vec))
             return -(ret - risk - tc - turnover)
 
         # Constraints
@@ -1889,6 +2437,11 @@ class ProductionEngine:
         # Score demeaning state
         self.raw_score_history = []  # rolling history for demeaning
         self.demeaning_window = self.cfg.get('score_demeaning_window', 60)
+        # v3.7: Hyperparameter cache (refit every 12 months via purged k-fold CV)
+        self.hp_cache = {}  # {instrument: {model_params}}
+        self.hp_last_refit = {}  # {instrument: last_refit_step_count}
+        self.step_count = 0
+        self.hp_refit_interval = 12  # refit hyperparameters every 12 months
 
     def initialize(self):
         """Load data and build features (called once)."""
@@ -1926,6 +2479,32 @@ class ProductionEngine:
         """
         # 1. Fit regime
         regime_probs = self.regime_model.get_probs_at(asof_date)
+
+        # v3.7: Periodic hyperparameter selection via purged k-fold CV
+        self.step_count += 1
+        if self.step_count % self.hp_refit_interval == 1:  # refit every 12 steps
+            window = self.cfg['training_window_months']
+            ret_df = self.data_layer.ret_df
+            feat_df = self.feature_engine.feature_df
+            if ret_df is not None and feat_df is not None:
+                for inst, feat_names in EnsembleAlphaModels.FEATURE_MAP.items():
+                    if inst not in ret_df.columns:
+                        continue
+                    available_feats = [f for f in feat_names if f in feat_df.columns]
+                    if len(available_feats) < 2:
+                        continue
+                    y = ret_df[inst].loc[:asof_date]
+                    X = feat_df[available_feats].loc[:asof_date]
+                    common = y.index.intersection(X.index)
+                    y = y.reindex(common).dropna()
+                    X = X.reindex(y.index).dropna()
+                    y = y.reindex(X.index)
+                    if len(y) > window:
+                        y = y.iloc[-window:]
+                        X = X.iloc[-window:]
+                    if len(y) >= 60:  # need enough data for CV
+                        hp = self.alpha_models.select_hyperparameters(X.values, y.values, inst)
+                        self.hp_cache[inst] = hp
 
         # 2. Fit ensemble alpha models and predict mu
         mu = self.alpha_models.fit_and_predict(asof_date)
@@ -2077,6 +2656,22 @@ class BacktestHarness:
 
         cash_ret = self.engine.data_layer.instrument_returns.get('cash', pd.Series(dtype=float))
 
+        # v3.8: Load Ibovespa benchmark for comparison
+        ibov_ret = pd.Series(dtype=float)
+        try:
+            ibov_path = os.path.join(DATA_DIR, 'IBOVESPA.csv')
+            if os.path.exists(ibov_path):
+                ibov_df = pd.read_csv(ibov_path, parse_dates=[0], index_col=0)
+                ibov_col = ibov_df.columns[0] if len(ibov_df.columns) > 0 else None
+                if ibov_col:
+                    ibov_prices = ibov_df[ibov_col].dropna()
+                    ibov_ret = ibov_prices.pct_change().dropna()
+                    ibov_ret.index = ibov_ret.index.to_period('M').to_timestamp()
+                    ibov_ret = ibov_ret.groupby(ibov_ret.index).apply(lambda x: (1 + x).prod() - 1)
+                    log(f"  Ibovespa benchmark loaded: {len(ibov_ret)} monthly returns")
+        except Exception as e:
+            log(f"  Ibovespa benchmark failed to load: {e}")
+
         # Start after training window
         train_window = self.cfg['training_window_months']
         start_idx = train_window
@@ -2087,10 +2682,15 @@ class BacktestHarness:
         # State
         equity_overlay = 1.0
         equity_total = 1.0
+        equity_ibov = 1.0  # v3.8: Ibovespa benchmark equity
         peak_overlay = 1.0
         peak_total = 1.0
+        peak_ibov = 1.0
         prev_weights = {}
         ic_history = {}  # {instrument: [(pred, realized), ...]}
+        shap_history = []  # v3.9: periodic SHAP snapshots [{date, instrument, feature, importance}]
+        shap_interval = 6  # compute SHAP every 6 months
+        last_shap_idx = -shap_interval  # force first computation
 
         records = []
 
@@ -2105,12 +2705,29 @@ class BacktestHarness:
             # Drawdown
             dd_overlay = (equity_overlay - peak_overlay) / peak_overlay if peak_overlay > 0 else 0
 
-            # Realized vol (from overlay returns, annualized)
+            # v3.7: GARCH(1,1) volatility model (replaces simple realized vol)
             realized_vol_ann = 0.10  # conservative default before enough history
-            if len(records) >= 12:
+            if len(records) >= 24:
+                recent_rets = np.array([r['overlay_return'] for r in records[-min(60, len(records)):]]) * 100  # scale to %
+                try:
+                    garch = arch_model(recent_rets, vol='Garch', p=1, q=1, mean='Zero', rescale=False)
+                    garch_fit = garch.fit(disp='off', show_warning=False)
+                    # Forecast 1-step ahead conditional variance
+                    forecast = garch_fit.forecast(horizon=1)
+                    cond_var = float(forecast.variance.iloc[-1, 0])  # monthly variance in %²
+                    garch_vol_monthly = np.sqrt(cond_var) / 100  # back to decimal
+                    realized_vol_ann = garch_vol_monthly * np.sqrt(12)
+                    realized_vol_ann = max(realized_vol_ann, 0.02)  # floor at 2%
+                    realized_vol_ann = min(realized_vol_ann, 0.50)  # cap at 50%
+                except Exception:
+                    # Fallback to simple realized vol if GARCH fails
+                    recent_rets_dec = [r['overlay_return'] for r in records[-min(20, len(records)):]]
+                    realized_vol_ann = float(np.std(recent_rets_dec) * np.sqrt(12))
+                    realized_vol_ann = max(realized_vol_ann, 0.02)
+            elif len(records) >= 12:
                 recent_rets = [r['overlay_return'] for r in records[-min(20, len(records)):]]
                 realized_vol_ann = float(np.std(recent_rets) * np.sqrt(12))
-                realized_vol_ann = max(realized_vol_ann, 0.02)  # floor at 2% to avoid division issues
+                realized_vol_ann = max(realized_vol_ann, 0.02)
 
             # IC scores (rolling 36m)
             ic_scores = {}
@@ -2144,7 +2761,7 @@ class BacktestHarness:
                 # Update OOS history for ensemble adaptive weights
                 model_preds = extra_info.get('model_predictions', {})
                 if inst in model_preds:
-                    for model_name in ['ridge', 'gbm']:
+                    for model_name in EnsembleAlphaModels.MODEL_NAMES:  # v3.7: all 4 models
                         if model_name in model_preds[inst]:
                             self.engine.alpha_models.update_oos_history(
                                 inst, model_name, model_preds[inst][model_name], r
@@ -2169,6 +2786,16 @@ class BacktestHarness:
             peak_overlay = max(peak_overlay, equity_overlay)
             peak_total = max(peak_total, equity_total)
 
+            # v3.8: Ibovespa benchmark tracking
+            ibov_r = 0.0
+            # Normalize date to month-start for matching (ret_df uses ME=month-end, ibov uses MS=month-start)
+            ibov_key = date.to_period('M').to_timestamp()
+            if ibov_key in ibov_ret.index:
+                ibov_r = float(ibov_ret.loc[ibov_key])
+            equity_ibov *= (1 + ibov_r)
+            peak_ibov = max(peak_ibov, equity_ibov)
+            dd_ibov_pct = (equity_ibov - peak_ibov) / peak_ibov if peak_ibov > 0 else 0
+
             # Trailing peak reset: use 12-month trailing high to allow recovery
             if len(records) >= 12:
                 trailing_12m = max(r['equity_overlay'] for r in records[-12:])
@@ -2178,12 +2805,18 @@ class BacktestHarness:
             dd_overlay_pct = (equity_overlay - peak_overlay) / peak_overlay
             dd_total_pct = (equity_total - peak_total) / peak_total
 
-            # Transaction costs
+            # Transaction costs (v3.8: regime-dependent multiplier)
             tc = 0.0
             tc_bps = self.cfg['transaction_costs_bps']
+            tc_regime_mults = self.cfg.get('tc_regime_multipliers', {})
+            tc_mult = sum(
+                regime_probs.get(regime, 0) * tc_regime_mults.get(regime, 1.0)
+                for regime in tc_regime_mults
+            ) if regime_probs else 1.0
+            tc_mult = max(tc_mult, 0.5)
             for inst in weights:
                 delta_w = abs(weights.get(inst, 0) - prev_weights.get(inst, 0))
-                tc += delta_w * tc_bps.get(inst, 5) / 10000
+                tc += delta_w * tc_bps.get(inst, 5) / 10000 * tc_mult
 
             # Turnover
             turnover = sum(abs(weights.get(inst, 0) - prev_weights.get(inst, 0)) for inst in set(list(weights.keys()) + list(prev_weights.keys())))
@@ -2218,23 +2851,83 @@ class BacktestHarness:
                 'P_domestic_calm': round(regime_probs.get('P_domestic_calm', 0), 3),
                 'P_domestic_stress': round(regime_probs.get('P_domestic_stress', 0), 3),
                 'tc_pct': round(tc * 100, 4),
+                'tc_mult': round(tc_mult, 2),
                 'turnover': round(turnover, 4),
                 'score_total': round(sum(mu.get(inst, 0) for inst in mu) * 100, 2),
                 'raw_score': round(extra_info.get('raw_score', 0) * 100, 3),
                 'demeaned_score': round(extra_info.get('demeaned_score', 0), 3),
-                'w_ridge_avg': round(np.mean([mp.get('w_ridge', 0.5) for mp in extra_info.get('model_predictions', {}).values()]) if extra_info.get('model_predictions') else 0.5, 3),
-                'w_gbm_avg': round(np.mean([mp.get('w_gbm', 0.5) for mp in extra_info.get('model_predictions', {}).values()]) if extra_info.get('model_predictions') else 0.5, 3),
+                'w_ridge_avg': round(np.mean([mp.get('w_ridge', 0.25) for mp in extra_info.get('model_predictions', {}).values()]) if extra_info.get('model_predictions') else 0.25, 3),
+                'w_gbm_avg': round(np.mean([mp.get('w_gbm', 0.25) for mp in extra_info.get('model_predictions', {}).values()]) if extra_info.get('model_predictions') else 0.25, 3),
+                'w_rf_avg': round(np.mean([mp.get('w_rf', 0.25) for mp in extra_info.get('model_predictions', {}).values()]) if extra_info.get('model_predictions') else 0.25, 3),
+                'w_xgb_avg': round(np.mean([mp.get('w_xgb', 0.25) for mp in extra_info.get('model_predictions', {}).values()]) if extra_info.get('model_predictions') else 0.25, 3),
                 # v2.3: Rolling Sharpe 12m for frontend chart
                 'rolling_sharpe_12m': round(self._compute_rolling_sharpe(records, 12), 3) if len(records) >= 12 else None,
+                # v3.8: Ibovespa benchmark
+                'ibov_return': round(ibov_r, 6),
+                'equity_ibov': round(equity_ibov, 6),
+                'drawdown_ibov': round(dd_ibov_pct * 100, 2),
             })
 
             prev_weights = dict(weights)
 
+            # v3.9: Periodic SHAP snapshot for historical tracking
+            if i - last_shap_idx >= shap_interval and self.engine.alpha_models:
+                try:
+                    snap = self.engine.alpha_models.compute_shap_snapshot(prev_date)
+                    if snap:
+                        for inst, feats in snap.items():
+                            for feat, importance in feats.items():
+                                shap_history.append({
+                                    'date': date.strftime('%Y-%m-%d'),
+                                    'instrument': inst,
+                                    'feature': feat,
+                                    'importance': importance,
+                                })
+                        last_shap_idx = i
+                except Exception:
+                    pass  # SHAP snapshot is non-critical
+
             if (i + 1) % 24 == 0:
                 log(f"  [{date.strftime('%Y-%m')}] overlay={equity_overlay:.4f}, total={equity_total:.4f}, dd={dd_overlay_pct*100:.1f}%")
 
+        # Trim records to start when overlay has active returns
+        # This ensures CDI and overlay start at the same point
+        active_start = None
+        for idx_r, rec in enumerate(records):
+            if abs(rec['overlay_return']) > 1e-8:
+                active_start = idx_r
+                break
+
+        if active_start is not None and active_start > 0:
+            trimmed = records[active_start:]
+            log(f"  Trimming backtest: removing {active_start} months of CDI-only period")
+            log(f"  Active period: {trimmed[0]['date']} → {trimmed[-1]['date']} ({len(trimmed)} months)")
+
+            # Recalculate equity curves from the active start
+            eq_overlay = 1.0
+            eq_total = 1.0
+            peak_ov = 1.0
+            peak_tot = 1.0
+            for j, rec in enumerate(trimmed):
+                eq_overlay *= (1 + rec['overlay_return'])
+                eq_total *= (1 + rec['total_return'])
+                peak_ov = max(peak_ov, eq_overlay)
+                peak_tot = max(peak_tot, eq_total)
+                if j >= 12:
+                    trail_ov = max(trimmed[k]['equity_overlay'] for k in range(max(0, j-12), j))
+                    peak_ov = max(trail_ov, eq_overlay)
+                    trail_tot = max(trimmed[k]['equity_total'] for k in range(max(0, j-12), j))
+                    peak_tot = max(trail_tot, eq_total)
+                rec['equity_overlay'] = round(eq_overlay, 6)
+                rec['equity_total'] = round(eq_total, 6)
+                rec['drawdown_overlay'] = round((eq_overlay - peak_ov) / peak_ov * 100, 2) if peak_ov > 0 else 0
+                rec['drawdown_total'] = round((eq_total - peak_tot) / peak_tot * 100, 2) if peak_tot > 0 else 0
+            records = trimmed
+
         self.results = records
+        self.shap_history = shap_history  # v3.9: temporal SHAP snapshots
         self._compute_summary(records, ic_history)
+        log(f"  SHAP history: {len(shap_history)} snapshots across {len(set(s['date'] for s in shap_history))} dates")
         return self
 
     @staticmethod
@@ -2305,9 +2998,11 @@ class BacktestHarness:
             total_pnl = sum(r[pnl_key] for r in records if pnl_key in r)
             attribution[inst] = round(total_pnl, 2)
 
-        # Ensemble weight stats
-        w_ridge_series = [r.get('w_ridge_avg', 0.5) for r in records]
-        w_gbm_series = [r.get('w_gbm_avg', 0.5) for r in records]
+        # Ensemble weight stats (v3.7: 4 models)
+        w_ridge_series = [r.get('w_ridge_avg', 0.25) for r in records]
+        w_gbm_series = [r.get('w_gbm_avg', 0.25) for r in records]
+        w_rf_series = [r.get('w_rf_avg', 0.25) for r in records]
+        w_xgb_series = [r.get('w_xgb_avg', 0.25) for r in records]
         demeaned_scores = [r.get('demeaned_score', 0) for r in records]
         raw_scores = [r.get('raw_score', 0) for r in records]
 
@@ -2346,10 +3041,15 @@ class BacktestHarness:
                 'return_pct': round(min(records, key=lambda r: r['overlay_return'])['overlay_return'] * 100, 2),
             },
             'ensemble': {
+                'models': ['ridge', 'gbm', 'rf', 'xgb'],  # v3.7
                 'avg_w_ridge': round(float(np.mean(w_ridge_series)), 3),
                 'avg_w_gbm': round(float(np.mean(w_gbm_series)), 3),
-                'final_w_ridge': round(w_ridge_series[-1], 3) if w_ridge_series else 0.5,
-                'final_w_gbm': round(w_gbm_series[-1], 3) if w_gbm_series else 0.5,
+                'avg_w_rf': round(float(np.mean(w_rf_series)), 3),
+                'avg_w_xgb': round(float(np.mean(w_xgb_series)), 3),
+                'final_w_ridge': round(w_ridge_series[-1], 3) if w_ridge_series else 0.25,
+                'final_w_gbm': round(w_gbm_series[-1], 3) if w_gbm_series else 0.25,
+                'final_w_rf': round(w_rf_series[-1], 3) if w_rf_series else 0.25,
+                'final_w_xgb': round(w_xgb_series[-1], 3) if w_xgb_series else 0.25,
             },
             'score_demeaning': {
                 'raw_score_mean': round(float(np.mean(raw_scores)), 3),
@@ -2365,6 +3065,30 @@ class BacktestHarness:
                 'global_stress_pct': round(sum(1 for r in records if r.get('P_stress', 0) > 0.5) / n_months * 100, 1),
             },
         }
+
+        # v3.8: Ibovespa benchmark metrics
+        ibov_rets = [r.get('ibov_return', 0) for r in records]
+        eq_ibov = records[-1].get('equity_ibov', 1.0)
+        if eq_ibov > 0 and n_years > 0:
+            ann_ret_ibov = (eq_ibov ** (1 / max(n_years, 0.5)) - 1)
+            ann_vol_ibov = float(np.std(ibov_rets) * np.sqrt(12))
+            sharpe_ibov = ann_ret_ibov / ann_vol_ibov if ann_vol_ibov > 0 else 0
+            max_dd_ibov = min(r.get('drawdown_ibov', 0) for r in records)
+            win_ibov = sum(1 for r in ibov_rets if r > 0) / n_months
+            self.summary['ibovespa'] = {
+                'total_return': round((eq_ibov - 1) * 100, 2),
+                'annualized_return': round(ann_ret_ibov * 100, 2),
+                'annualized_vol': round(ann_vol_ibov * 100, 2),
+                'sharpe': round(sharpe_ibov, 2),
+                'max_drawdown': round(max_dd_ibov, 2),
+                'calmar': round(ann_ret_ibov * 100 / abs(max_dd_ibov), 2) if max_dd_ibov != 0 else 0,
+                'win_rate': round(win_ibov * 100, 1),
+            }
+        else:
+            self.summary['ibovespa'] = {
+                'total_return': 0, 'annualized_return': 0, 'annualized_vol': 0,
+                'sharpe': 0, 'max_drawdown': 0, 'calmar': 0, 'win_rate': 0,
+            }
 
         log("\n" + "=" * 60)
         log("BACKTEST SUMMARY v2.3")
@@ -2403,6 +3127,12 @@ class BacktestHarness:
         log(f"    Global stress:   {self.summary['regime_two_level']['global_stress_pct']:.1f}%")
         log(f"    Domestic calm:   {self.summary['regime_two_level']['domestic_calm_pct']:.1f}%")
         log(f"    Domestic stress: {self.summary['regime_two_level']['domestic_stress_pct']:.1f}%")
+        log(f"\n  IBOVESPA BENCHMARK:")
+        ibov = self.summary.get('ibovespa', {})
+        log(f"    Total return: {ibov.get('total_return', 0):.2f}%")
+        log(f"    Ann return:   {ibov.get('annualized_return', 0):.2f}%")
+        log(f"    Sharpe:       {ibov.get('sharpe', 0):.2f}")
+        log(f"    Max DD:       {ibov.get('max_drawdown', 0):.2f}%")
 
 
 # ============================================================
@@ -2654,7 +3384,8 @@ def run_v2(config=None):
                 mu_val = last_row.get(f'mu_{inst}', 0)
                 sharpe_val = mu_val / max(abs(mu_val) * 2, 0.01) if mu_val != 0 else 0
                 if inst == 'fx':
-                    dir_str = 'LONG BRL' if mu_val > 0 else 'SHORT BRL' if mu_val < 0 else 'NEUTRAL'
+                    # FX instrument is defined as 'long USD': mu_fx > 0 means USD appreciates = SHORT BRL
+                    dir_str = 'SHORT BRL' if mu_val > 0 else 'LONG BRL' if mu_val < 0 else 'NEUTRAL'
                 else:
                     dir_str = 'LONG' if mu_val > 0 else 'SHORT' if mu_val < 0 else 'NEUTRAL'
                 positions[inst] = {
@@ -2725,11 +3456,12 @@ def run_v2(config=None):
             di_5y = _read_last('DI_5Y.csv')
             di_10y = _read_last('DI_10Y.csv')
 
-            # Read EMBI
-            cds = _read_last('CDS_5Y_BCB.csv')
-            embi_spread = abs(cds) if cds < 0 else cds  # BCB stores as negative
-            if embi_spread > 1000:
-                embi_spread = embi_spread / 100  # Normalize to bps
+            # Read EMBI spread (from IPEADATA + FRED extension)
+            embi_spread = _read_last('EMBI_SPREAD.csv')
+            if embi_spread <= 0:
+                embi_spread = _read_last('CDS_5Y.csv') / 0.7  # Reverse CDS proxy
+            if embi_spread > 2000:
+                embi_spread = embi_spread / 100  # Normalize if in wrong units
 
             # FX fair values from feature engine
             if hasattr(engine.feature_engine, '_ppp_fair'):
@@ -2739,6 +3471,13 @@ def run_v2(config=None):
             if hasattr(engine.feature_engine, '_fx_fair'):
                 fx_fair = engine.feature_engine._fx_fair
             fx_mis = round((current_spot / fx_fair - 1) * 100, 1) if fx_fair > 0 and current_spot > 0 else 0
+            # New indicators: BS-PPP and FEER
+            ppp_bs_fair = 0
+            feer_fair = 0
+            if hasattr(engine.feature_engine, '_ppp_bs_fair'):
+                ppp_bs_fair = engine.feature_engine._ppp_bs_fair
+            if hasattr(engine.feature_engine, '_feer_fair'):
+                feer_fair = engine.feature_engine._feer_fair
 
             # Rates fair values from Taylor Rule (FeatureEngine)
             if hasattr(engine.feature_engine, '_front_fair'):
@@ -2803,7 +3542,9 @@ def run_v2(config=None):
                 'vix': round(vix_val, 2),
                 'dxy': round(dxy_val, 2),
                 'ppp_fair': round(ppp_fair, 2),
+                'ppp_bs_fair': round(ppp_bs_fair, 2),
                 'beer_fair': round(beer_fair, 2),
+                'feer_fair': round(feer_fair, 2),
                 'fx_fair_value': round(fx_fair, 2),
                 'fx_misalignment': round(fx_mis, 1),
                 'front_fair': round(front_fair, 2),
@@ -2885,28 +3626,43 @@ def run_v2(config=None):
             output['cyclical_ts'] = cyclical_ts
             log(f"  Cyclical factors timeseries: {len(cyclical_ts)} points")
 
-        # --- Fair Value Timeseries (spot + PPP + BEER + FX fair) ---
+        # --- Fair Value Timeseries (spot + PPP + PPP_BS + BEER + FEER + FX fair) ---
         spot_m = m.get('ptax', m.get('spot', pd.Series(dtype=float)))
         ppp_fair_ts = fe.features.get('ppp_fair_ts', pd.Series(dtype=float))
+        ppp_bs_fair_ts = fe.features.get('ppp_bs_fair_ts', pd.Series(dtype=float))
         beer_fair_ts = fe.features.get('beer_fair_ts', pd.Series(dtype=float))
+        feer_fair_ts = fe.features.get('feer_fair_ts', pd.Series(dtype=float))
         fx_fair_ts = fe.features.get('fx_fair_ts', pd.Series(dtype=float))
 
         if len(spot_m) > 0:
+            # Reindex each component to spot dates with forward-fill for recent months
+            ppp_reindexed = ppp_fair_ts.reindex(spot_m.index, method='ffill') if len(ppp_fair_ts) > 0 else pd.Series(dtype=float)
+            ppp_bs_reindexed = ppp_bs_fair_ts.reindex(spot_m.index, method='ffill') if len(ppp_bs_fair_ts) > 0 else pd.Series(dtype=float)
+            beer_reindexed = beer_fair_ts.reindex(spot_m.index, method='ffill') if len(beer_fair_ts) > 0 else pd.Series(dtype=float)
+            feer_reindexed = feer_fair_ts.reindex(spot_m.index, method='ffill') if len(feer_fair_ts) > 0 else pd.Series(dtype=float)
+            fx_reindexed = fx_fair_ts.reindex(spot_m.index, method='ffill') if len(fx_fair_ts) > 0 else pd.Series(dtype=float)
+
             fv_ts = []
             for dt in spot_m.index:
                 pt = {
                     'date': dt.strftime('%Y-%m-%d'),
                     'spot': round(float(spot_m.loc[dt]), 4),
                 }
-                if len(ppp_fair_ts) > 0:
-                    avail = ppp_fair_ts.loc[:dt]
-                    pt['ppp_fair'] = round(float(avail.iloc[-1]), 4) if len(avail) > 0 else None
-                if len(beer_fair_ts) > 0:
-                    avail = beer_fair_ts.loc[:dt]
-                    pt['beer_fair'] = round(float(avail.iloc[-1]), 4) if len(avail) > 0 else None
-                if len(fx_fair_ts) > 0:
-                    avail = fx_fair_ts.loc[:dt]
-                    pt['fx_fair'] = round(float(avail.iloc[-1]), 4) if len(avail) > 0 else None
+                if len(ppp_reindexed) > 0:
+                    val = ppp_reindexed.get(dt)
+                    pt['ppp_fair'] = round(float(val), 4) if pd.notna(val) else None
+                if len(ppp_bs_reindexed) > 0:
+                    val = ppp_bs_reindexed.get(dt)
+                    pt['ppp_bs_fair'] = round(float(val), 4) if pd.notna(val) else None
+                if len(beer_reindexed) > 0:
+                    val = beer_reindexed.get(dt)
+                    pt['beer_fair'] = round(float(val), 4) if pd.notna(val) else None
+                if len(feer_reindexed) > 0:
+                    val = feer_reindexed.get(dt)
+                    pt['feer_fair'] = round(float(val), 4) if pd.notna(val) else None
+                if len(fx_reindexed) > 0:
+                    val = fx_reindexed.get(dt)
+                    pt['fx_fair'] = round(float(val), 4) if pd.notna(val) else None
                 fv_ts.append(pt)
             output['fair_value_ts'] = fv_ts
             log(f"  Fair value timeseries: {len(fv_ts)} points")
@@ -2925,6 +3681,40 @@ def run_v2(config=None):
             })
         output['score_ts'] = score_ts
         log(f"  Score timeseries: {len(score_ts)} points")
+
+    # ============================================================
+    # v3.8: SHAP FEATURE IMPORTANCE
+    # ============================================================
+    if harness.engine and harness.engine.alpha_models:
+        try:
+            ret_df = harness.engine.data_layer.ret_df
+            if ret_df is not None and len(ret_df) > 0:
+                latest_date = ret_df.index[-1]
+                log(f"\n  Computing SHAP feature importance at {latest_date}...")
+                shap_importance = harness.engine.alpha_models.compute_shap_importance(latest_date)
+                if shap_importance:
+                    output['shap_importance'] = shap_importance
+                    for inst, feats in shap_importance.items():
+                        n_feats = len(feats)
+                        top3 = sorted(feats.items(), key=lambda x: abs(x[1].get('current', 0)), reverse=True)[:3]
+                        top3_str = ', '.join(f"{f}={v['current']:.4f}" for f, v in top3)
+                        log(f"    {inst}: {n_feats} features, top3: {top3_str}")
+                else:
+                    log("    SHAP: no importance computed")
+                    output['shap_importance'] = {}
+        except Exception as e:
+            log(f"    SHAP computation failed: {e}")
+            output['shap_importance'] = {}
+
+    # ============================================================
+    # v3.9: SHAP HISTORY (temporal evolution from backtest)
+    # ============================================================
+    shap_history = getattr(harness, 'shap_history', [])
+    output['shap_history'] = shap_history
+    if shap_history:
+        n_dates = len(set(s['date'] for s in shap_history))
+        n_instruments = len(set(s['instrument'] for s in shap_history))
+        log(f"  SHAP history: {len(shap_history)} entries, {n_dates} dates, {n_instruments} instruments")
 
     return output
 

@@ -64,8 +64,8 @@ function ZScoreBar({ value, label }: { value: number; label: string }) {
 }
 
 function DirectionBadge({ direction, er }: { direction: string; er: number }) {
-  const isLong = direction.includes('LONG');
-  const isShort = direction.includes('SHORT');
+  const isLong = direction?.includes('LONG') ?? false;
+  const isShort = direction?.includes('SHORT') ?? false;
   const color = isLong ? 'text-emerald-400' : isShort ? 'text-rose-400' : 'text-amber-400';
   const Icon = isLong ? ArrowUpRight : isShort ? ArrowDownRight : Minus;
   return (
@@ -113,10 +113,11 @@ export function OverviewGrid({ dashboard: d }: Props) {
                   direction={d.positions?.fx?.direction || d.direction}
                   er={d.positions?.fx?.expected_return_6m || 0}
                 />
-                <MetricRow label="Fair Value" value={fmtNum(d.fx_fair_value)} tooltip="Média ponderada PPP + BEER" />
-                <MetricRow label="Misalignment" value={fmtPct(d.fx_misalignment)} color={misColor(d.fx_misalignment)} />
-                <MetricRow label="PPP Fair" value={fmtNum(d.ppp_fair)} />
-                <MetricRow label="BEER Fair" value={fmtNum(d.beer_fair)} />
+                <MetricRow label="Fair Value (BEER)" value={fmtNum(d.fx_fair_value)} tooltip="BEER equilibrium model (REER-based, institutional standard — primary fair value)" />
+                <MetricRow label="Misalignment" value={fmtPct(d.fx_misalignment)} color={misColor(d.fx_misalignment)} tooltip="Spot vs BEER fair value" />
+                <MetricRow label="PPP-BS" value={fmtNum(d.ppp_bs_fair)} tooltip="PPP ajustado por Balassa-Samuelson (β=0.35): corrige o viés de produtividade para EM" />
+                <MetricRow label="FEER" value={fmtNum(d.feer_fair)} tooltip="Fundamental Equilibrium ER: câmbio consistente com conta corrente sustentável (-2.0% PIB)" />
+                <MetricRow label="PPP Raw" value={fmtNum(d.ppp_fair)} tooltip="PPP conversion factor bruto (referência estrutural de longo prazo, não é fair value)" />
                 <MetricRow label="Sharpe" value={fmtNum(d.positions?.fx?.sharpe)} />
                 <MetricRow label="Weight" value={fmtNum(d.positions?.fx?.weight, 3)} />
               </CardContent>
@@ -214,16 +215,21 @@ export function OverviewGrid({ dashboard: d }: Props) {
                   {Object.entries(d.state_variables).map(([key, value]) => {
                     const v = value as number;
                     const labels: Record<string, string> = {
-                      'Z_X1_diferencial_real': 'X1: Diferencial Real',
-                      'Z_X2_surpresa_inflacao': 'X2: Surpresa Inflação',
-                      'Z_X3_fiscal_risk': 'X3: Risco Fiscal',
-                      'Z_X4_termos_de_troca': 'X4: Termos de Troca',
-                      'Z_X5_dolar_global': 'X5: Dólar Global',
-                      'Z_X6_risk_global': 'X6: Risco Global',
-                      'Z_X7_hiato': 'X7: Hiato do Produto',
+                      'X1_diferencial_real': 'Diferencial Real',
+                      'X2_surpresa_inflacao': 'Surpresa Inflação',
+                      'X3_fiscal_risk': 'Risco Fiscal',
+                      'X4_termos_de_troca': 'Termos de Troca',
+                      'X5_dolar_global': 'Dólar Global (DXY)',
+                      'X6_risk_global': 'Risco Global (VIX)',
+                      'X7_cds_brasil': 'CDS Brasil',
+                      'X8_beer_misalignment': 'BEER Misalignment',
+                      'X9_reer_gap': 'REER Gap',
+                      'X10_term_premium': 'Term Premium',
+                      'X11_cip_basis': 'CIP Basis',
+                      'X12_iron_ore': 'Iron Ore',
                     };
                     return (
-                      <ZScoreBar key={key} value={v || 0} label={labels[key] || key} />
+                      <ZScoreBar key={key} value={v || 0} label={labels[key] || key.replace(/^X\d+_/, '')} />
                     );
                   })}
                 </div>
@@ -329,7 +335,7 @@ export function OverviewGrid({ dashboard: d }: Props) {
               {isMROS && d.risk_metrics && (
                 <>
                   <div className="border-t border-border/30 pt-2 mt-2">
-                    <MetricRow label="Portfolio Vol" value={`${(d.risk_metrics.portfolio_vol * 100).toFixed(2)}%`} tooltip="Volatilidade anualizada do portfólio cross-asset" />
+                    <MetricRow label="Portfolio Vol" value={`${d.risk_metrics.portfolio_vol < 1 ? (d.risk_metrics.portfolio_vol * 100).toFixed(2) : d.risk_metrics.portfolio_vol.toFixed(2)}%`} tooltip="Volatilidade anualizada do portfólio cross-asset" />
                     <MetricRow label="VIX" value={fmtNum(d.vix)} />
                     <MetricRow label="DXY" value={fmtNum(d.dxy)} />
                   </div>

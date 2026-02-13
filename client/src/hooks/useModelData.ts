@@ -26,12 +26,35 @@ export interface ModelDetail {
 }
 
 /** Stress test result */
-export interface StressTest {
+/** Legacy stress test format (v1) */
+export interface StressTestLegacy {
   name: string;
   return_pct: number;
   max_dd_pct: number;
   per_asset?: Record<string, number>;
 }
+
+/** v2.3 Stress test scenario result */
+export interface StressTestV23 {
+  name: string;
+  category: string;
+  description: string;
+  period: string;
+  n_months: number;
+  overlay_return: number;
+  total_return: number;
+  max_dd_overlay: number;
+  annualized_vol: number;
+  mean_monthly_return: number;
+  worst_month: { date: string; return_pct: number };
+  best_month: { date: string; return_pct: number };
+  avg_weights: Record<string, number>;
+  avg_regime: Record<string, number>;
+  attribution: Record<string, number>;
+  win_rate: number;
+}
+
+export type StressTest = StressTestLegacy;
 
 /** Full Macro Risk OS Dashboard */
 export interface MacroDashboard {
@@ -56,11 +79,15 @@ export interface MacroDashboard {
   fx_fair_value: number;
   fx_misalignment: number;
   ppp_fair: number;
+  ppp_bs_fair: number;
   beer_fair: number;
+  feer_fair: number;
   
   // Rates
   front_fair: number;
+  belly_fair: number;
   long_fair: number;
+  taylor_gap: number;
   term_premium: number;
   selic_target: number;
   di_1y: number;
@@ -97,6 +124,32 @@ export interface MacroDashboard {
     max_drawdown_historical?: number;
   };
   
+  // v2.2 Backtest-derived overlay metrics (preferred over legacy risk_metrics)
+  overlay_metrics?: {
+    total_return: number;
+    annualized_return: number;
+    annualized_vol: number;
+    sharpe: number;
+    max_drawdown: number;
+    calmar: number;
+    win_rate: number;
+  };
+  total_metrics?: {
+    total_return: number;
+    annualized_return: number;
+    annualized_vol: number;
+    sharpe: number;
+    max_drawdown: number;
+  };
+  ic_per_instrument?: Record<string, number>;
+  hit_rates?: Record<string, number>;
+  attribution?: Record<string, number>;
+  total_tc_pct?: number;
+  avg_monthly_turnover?: number;
+
+  // v2.3 Stress test scenarios (dict keyed by scenario ID)
+  stress_tests?: Record<string, StressTestV23>;
+
   // Legacy FX-only fields (backward compat)
   ppp_abs_fair_value?: number;
   ppp_rel_fair_value?: number;
@@ -184,6 +237,116 @@ export interface ScorePoint {
   score_regime: number | null;
 }
 
+export interface BacktestPoint {
+  date: string;
+  // v2 overlay-on-CDI
+  equity_overlay: number;
+  equity_total: number;
+  overlay_return: number;
+  cash_return: number;
+  total_return: number;
+  drawdown_overlay: number;
+  drawdown_total: number;
+  // PnL attribution (5 instruments)
+  fx_pnl: number;
+  front_pnl: number;
+  belly_pnl: number;
+  long_pnl: number;
+  hard_pnl: number;
+  // Weights
+  weight_fx: number;
+  weight_front: number;
+  weight_belly: number;
+  weight_long: number;
+  weight_hard: number;
+  // Mu predictions
+  mu_fx: number;
+  mu_front: number;
+  mu_belly: number;
+  mu_long: number;
+  mu_hard: number;
+  // Regime
+  P_carry: number;
+  P_riskoff: number;
+  P_stress: number;
+  // Costs
+  tc_pct: number;
+  turnover: number;
+  // Score
+  score_total: number;
+  // Legacy compat
+  equity?: number;
+  drawdown?: number;
+  monthly_return?: number;
+  cdi_equity?: number;
+  usdbrl_equity?: number;
+}
+
+export interface BacktestSummary {
+  // v2 overlay-on-CDI
+  period?: string;
+  n_months?: number;
+  overlay?: {
+    total_return: number;
+    annualized_return: number;
+    annualized_vol: number;
+    sharpe: number;
+    max_drawdown: number;
+    calmar: number;
+    win_rate: number;
+  };
+  total?: {
+    total_return: number;
+    annualized_return: number;
+    annualized_vol: number;
+    sharpe: number;
+    max_drawdown: number;
+    calmar: number;
+    win_rate: number;
+  };
+  ic_per_instrument?: Record<string, number>;
+  hit_rates?: Record<string, number>;
+  attribution_pct?: Record<string, number>;
+  total_tc_pct?: number;
+  avg_monthly_turnover?: number;
+  best_month?: { date: string; return_pct: number };
+  worst_month?: { date: string; return_pct: number };
+  // v2.1 Ensemble & Score Demeaning
+  ensemble?: {
+    avg_w_ridge: number;
+    avg_w_gbm: number;
+    avg_w_rf?: number;
+    avg_w_xgb?: number;
+    final_w_ridge: number;
+    final_w_gbm: number;
+    final_w_rf?: number;
+    final_w_xgb?: number;
+  };
+  score_demeaning?: {
+    raw_score_mean: number;
+    raw_score_std: number;
+    demeaned_score_mean: number;
+    demeaned_score_std: number;
+  };
+  // Legacy compat
+  total_return?: number;
+  annualized_return?: number;
+  annualized_vol?: number;
+  sharpe_ratio?: number;
+  max_drawdown?: number;
+  win_rate?: number;
+  total_months?: number;
+  start_date?: string;
+  end_date?: string;
+  cdi_total_return?: number;
+  usdbrl_bh_total_return?: number;
+}
+
+export interface BacktestData {
+  timeseries: BacktestPoint[];
+  summary: BacktestSummary;
+}
+
 /**
  * Detect if dashboard data is from the new Macro Risk OS or legacy FX-only model
  */
@@ -207,6 +370,9 @@ export function useModelData() {
         cyclicalFactors: (apiData.cyclical || []) as unknown as CyclicalPoint[],
         stateVariables: (apiData.stateVariables || []) as unknown as StateVarPoint[],
         score: (apiData.score || []) as unknown as ScorePoint[],
+        backtest: (apiData.backtest || null) as unknown as BacktestData | null,
+        shapImportance: (apiData.shapImportance || null) as Record<string, Record<string, { mean_abs: number; current: number; rank: number }>> | null,
+        shapHistory: (apiData.shapHistory || null) as Array<{ date: string; instrument: string; feature: string; importance: number }> | null,
         isMacroRiskOS: isMacroRiskOS(apiData.dashboard as Record<string, unknown>),
         loading: false,
         error: null as string | null,
@@ -223,6 +389,9 @@ export function useModelData() {
       cyclicalFactors: cyclicalData as unknown as CyclicalPoint[],
       stateVariables: [] as StateVarPoint[],
       score: [] as ScorePoint[],
+      backtest: null as BacktestData | null,
+      shapImportance: null as Record<string, Record<string, { mean_abs: number; current: number; rank: number }>> | null,
+      shapHistory: null as Array<{ date: string; instrument: string; feature: string; importance: number }> | null,
       isMacroRiskOS: false,
       loading: false,
       error: null as string | null,

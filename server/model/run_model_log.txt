@@ -1,0 +1,137 @@
+[RUNNER] Starting data collection...
+============================================================
+Macro Risk OS Data Collector v2.2
+============================================================
+
+============================================================
+[ANBIMA FEED API - Primary Source for BR Rates]
+============================================================
+
+[ANBIMA ETTJ - DI Curve Term Structure]
+  [ANBIMA] Token obtained (expires in 3600s)
+  Reference date: 2024-04-04
+  DI_3M: 10.1728% (du=63)
+  DI_6M: 9.9601% (du=126)
+  DI_1Y: 9.8093% (du=252)
+  DI_2Y: 10.0252% (du=504)
+  DI_3Y: 10.4037% (du=756)
+  DI_5Y: 10.9656% (du=1260)
+  ANBIMA_NTNB_5Y: 5.7724% (du=1260)
+  DI_10Y: 11.3760% (du=2520)
+  ANBIMA_NTNB_10Y: 5.8866% (du=2520)
+  NS params (IPCA): b1=0.060359, b2=0.037991
+  NS params (PREFIXADOS): b1=0.114872, b2=-0.009639
+  ETTJ: 9 series extracted from 75 vertices
+
+[ANBIMA BONDS - Secondary Market]
+  ANBIMA_NTNB_BOND_5Y: 5.6054% (mat=2029-05-15, 5.2Y)
+  ANBIMA_NTNB_BOND_10Y: 5.6714% (mat=2033-05-15, 9.2Y)
+  ANBIMA_NTNF_5Y: 10.3570% (mat=2029-01-01, 4.8Y)
+  ANBIMA_NTNF_10Y: 10.7262% (mat=2035-01-01, 10.8Y)
+  NTN-B curve (15 bonds):
+    mat=2024-08-15 (0.4Y): 7.5400%
+    mat=2025-05-15 (1.2Y): 5.9633%
+    mat=2026-08-15 (2.4Y): 5.6400%
+    mat=2027-05-15 (3.2Y): 5.5800%
+    mat=2028-08-15 (4.4Y): 5.5894%
+    mat=2029-05-15 (5.2Y): 5.6054%
+    mat=2030-08-15 (6.4Y): 5.5854%
+    mat=2032-08-15 (8.4Y): 5.6762%
+    mat=2033-05-15 (9.2Y): 5.6714%
+    mat=2035-05-15 (11.2Y): 5.6987%
+    mat=2040-08-15 (16.4Y): 5.7225%
+    mat=2045-05-15 (21.2Y): 5.7759%
+    mat=2050-08-15 (26.4Y): 5.7900%
+    mat=2055-05-15 (31.2Y): 5.7800%
+    mat=2060-08-15 (36.4Y): 5.8100%
+  ANBIMA_BREAKEVEN_5Y: 4.7516% (NTN-F 10.36% - NTN-B 5.61%)
+  ANBIMA_BREAKEVEN_10Y: 5.0548% (NTN-F 10.73% - NTN-B 5.67%)
+  Bonds: 6 series extracted
+  [ANBIMA] Total: 15 series collected
+
+[DI CURVE - Trading Economics]
+  [TE] GEBR3M:IND: time data "30/01/2026" doesn't match format "%m/%d/%Y", at position 9. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
+  DI_3M: CACHE 314 pts, last=14.700%
+  [TE] GEBR6M:IND: time data "30/01/2026" doesn't match format "%m/%d/%Y", at position 9. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
+  DI_6M: CACHE 314 pts, last=14.400%
+  [TE] GEBR1Y:IND: time data "30/01/2026" doesn't match format "%m/%d/%Y", at position 9. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
+  DI_1Y: CACHE 314 pts, last=13.900%
+  [TE] GEBR2Y:IND: time data "30/01/2026" doesn't match format "%m/%d/%Y", at position 9. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
+  DI_2Y: CACHE 314 pts, last=13.400%
+  [TE] GEBR3Y:IND: time data "30/01/2026" doesn't match format "%m/%d/%Y", at position 9. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
+  DI_3Y: CACHE 314 pts, last=13.700%
+  [TE] GEBR5Y:IND: time data "30/01/2026" doesn't match format "%m/%d/%Y", at position 9. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
+  DI_5Y: CACHE 314 pts, last=13.900%
+  [TE] GEBR10Y:IND: time data "30/01/2026" doesn't match format "%m/%d/%Y", at position 9. You might want to try:
+    - passing `format` if your strings have a consistent format;
+    - passing `format='ISO8601'` if your strings are all ISO8601 but not necessarily in exactly the same format;
+    - passing `format='mixed'`, and the format will be inferred for each element individually. You might want to use `dayfirst` alongside this.
+  DI_10Y: CACHE 314 pts, last=14.400%
+  DI_3M: ANBIMA primary, TE stored as TE_DI_3M
+  DI_6M: ANBIMA primary, TE stored as TE_DI_6M
+  DI_1Y: ANBIMA primary, TE stored as TE_DI_1Y
+  DI_2Y: ANBIMA primary, TE stored as TE_DI_2Y
+  DI_3Y: ANBIMA primary, TE stored as TE_DI_3Y
+  DI_5Y: ANBIMA primary, TE stored as TE_DI_5Y
+  DI_10Y: ANBIMA primary, TE stored as TE_DI_10Y
+
+[FRED DATA]
+  [FRED] UST_2Y: 4029 pts, last=3.5200
+  [FRED] UST_5Y: 4029 pts, last=3.7500
+  [FRED] UST_10Y: 4029 pts, last=4.1800
+  [FRED] UST_30Y: 4029 pts, last=4.8200
+  [FRED] VIX: 4080 pts, last=17.6500
+  [FRED] DXY_FRED: 4007 pts, last=118.2407
+  [FRED] NFCI: 841 pts, last=-0.5631
+  [FRED] FCI_STLFSI: 628 pts, last=-0.8509
+  [FRED] CPI_US: 191 pts, last=326.0300
+  [FRED] US_BREAKEVEN_10Y: 4030 pts, last=2.2900
+  [FRED] US_HY_SPREAD: 4208 pts, last=4.9300
+  [FRED] FED_FUNDS: 193 pts, last=3.6400
+  [FRED] US_TIPS_5Y: 4029 pts, last=1.2600
+  [FRED] US_TIPS_10Y: 4029 pts, last=1.8600
+  [FRED] US_IP: 192 pts, last=102.3250
+  [FRED] US_CPI_EXP: 192 pts, last=4.2000
+
+[FMP US TREASURY]
+  FMP_UST_2Y: 60 pts, last=3.470%
+  FMP_UST_5Y: 60 pts, last=3.670%
+  FMP_UST_10Y: 60 pts, last=4.090%
+  FMP_UST_30Y: 60 pts, last=4.720%
+
+[YAHOO FINANCE]
+  [YF] USDBRL: 4194 pts, last=5.2120
+  [YF] VIX_YF: 4053 pts, last=20.8200
+  [YF] DXY_YF: 4054 pts, last=96.9340
+  [YF] UST10Y_YF: 4051 pts, last=4.1040
+  [YF] UST5Y_YF: 4051 pts, last=3.6680
+  [YF] CRUDE_OIL: 4053 pts, last=62.7800
+  [YF] GOLD: 4052 pts, last=4996.6001
+  [YF] SOYBEAN: 4052 pts, last=1137.5000
+  [YF] COFFEE: 4052 pts, last=299.0500
+  [YF] IRON_ORE: 4053 pts, last=451.3900
+  [YF] EWZ: 4053 pts, last=38.4900
+  [YF] SPY: 4053 pts, last=681.2700
+
+[BCB SGS]
+  [BCB] IPCA_MONTHLY: 253 pts, last=0.3300
+  [BCB] IPCA_MONTHLY: failed chunks: [(2000, 2004)]
+  [BCB] IPCA_12M_BCB: 312 pts, last=0.2500

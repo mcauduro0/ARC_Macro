@@ -18,8 +18,10 @@ interface Props {
 const COLORS = {
   spot: '#06b6d4',
   ppp_fair: '#a78bfa',
+  ppp_bs_fair: '#c084fc',
   fx_fair: '#f59e0b',
   beer_fair: '#34d399',
+  feer_fair: '#fb923c',
   // Z-scores from state variables
   z_x1: '#06b6d4',    // Diferencial Real
   z_x2: '#f472b6',    // Surpresa Inflação
@@ -184,9 +186,10 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
                   <RTooltip content={<CustomTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Line type="monotone" dataKey="spot" stroke={COLORS.spot} strokeWidth={2} dot={false} name="Spot" connectNulls isAnimationActive={false} />
-                  <Line type="monotone" dataKey="ppp_fair" stroke={COLORS.ppp_fair} strokeWidth={1.5} dot={false} name="PPP Fair" strokeDasharray="6 3" connectNulls isAnimationActive={false} />
-                  <Line type="monotone" dataKey="beer_fair" stroke={COLORS.beer_fair} strokeWidth={1.5} dot={false} name="BEER Fair" connectNulls isAnimationActive={false} />
-                  <Line type="monotone" dataKey="fx_fair" stroke={COLORS.fx_fair} strokeWidth={1.5} dot={false} name="FX Fair (BEER+Regime)" strokeDasharray="4 2" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="beer_fair" stroke={COLORS.beer_fair} strokeWidth={2} dot={false} name="BEER Fair" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="ppp_bs_fair" stroke={COLORS.ppp_bs_fair} strokeWidth={1.5} dot={false} name="PPP-BS" strokeDasharray="6 3" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="feer_fair" stroke={COLORS.feer_fair} strokeWidth={1.5} dot={false} name="FEER" strokeDasharray="4 2" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="ppp_fair" stroke={COLORS.ppp_fair} strokeWidth={1} dot={false} name="PPP Raw" strokeDasharray="2 4" strokeOpacity={0.5} connectNulls isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -196,7 +199,7 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
           {activeTab === 'zscores' && (
             <div className="h-[360px]">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={filteredTS} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                <LineChart data={filteredStateVars} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
                   <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
                   <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={[-3, 3]} />

@@ -13,6 +13,14 @@ interface ModelOutput {
   state_variables_ts?: Array<Record<string, unknown>>;
   cyclical_factors_ts?: Array<Record<string, unknown>>;
   score_ts?: Array<Record<string, unknown>>;
+  backtest_ts?: {
+    timeseries: Array<Record<string, unknown>>;
+    summary: Record<string, unknown>;
+  };
+  stress_tests?: Record<string, Record<string, unknown>>;
+  fair_value_ts?: Array<Record<string, unknown>>;
+  shap_importance?: Record<string, Record<string, { mean_abs: number; current: number; rank: number }>>;
+  shap_history?: Array<{ date: string; instrument: string; feature: string; importance: number }>;
   // Legacy fields (from old FX-only model, via run_model.py)
   legacy_fx?: { dashboard: Record<string, unknown> } | null;
   legacy_timeseries?: Array<Record<string, unknown>>;
@@ -38,6 +46,15 @@ export async function executeModel(): Promise<{ success: boolean; runId?: number
     const output = await runPythonModel();
     const parsed: ModelOutput = JSON.parse(output);
 
+    // v2.3: Embed stress_tests into dashboard for storage
+    if (parsed.stress_tests) {
+      parsed.dashboard.stress_tests = parsed.stress_tests;
+    }
+    // v2.3: Embed fair_value_ts into dashboard for storage
+    if (parsed.fair_value_ts) {
+      parsed.dashboard.fair_value_ts = parsed.fair_value_ts;
+    }
+
     const runId = await insertModelRun({
       runDate: parsed.dashboard.run_date as string || new Date().toISOString().slice(0, 10),
       currentSpot: parsed.dashboard.current_spot as number || 0,
@@ -47,6 +64,9 @@ export async function executeModel(): Promise<{ success: boolean; runId?: number
       cyclicalJson: parsed.cyclical_factors_ts || [],  // Raw macro factors (DXY, VIX, EMBI, etc.)
       stateVariablesJson: parsed.state_variables_ts || [],
       scoreJson: parsed.score_ts || [],
+      backtestJson: parsed.backtest_ts || null,
+      shapJson: parsed.shap_importance || null,  // v3.8: SHAP feature importance
+      shapHistoryJson: parsed.shap_history || null,  // v3.9: SHAP temporal evolution
       legacyDashboardJson: parsed.legacy_fx?.dashboard || null,
       legacyTimeseriesJson: parsed.legacy_timeseries || null,
       legacyRegimeJson: parsed.legacy_regime || null,

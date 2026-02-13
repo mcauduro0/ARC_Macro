@@ -1,7 +1,8 @@
 import { MacroDashboard, useModelStatus, useRunModel } from '@/hooks/useModelData';
-import { TrendingUp, TrendingDown, Minus, Activity, Shield, Zap, AlertTriangle, RefreshCw, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Activity, Shield, Zap, AlertTriangle, RefreshCw, Wifi, WifiOff, Loader2, BarChart3 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
+import { Link } from 'wouter';
 
 interface Props {
   dashboard: MacroDashboard;
@@ -9,15 +10,17 @@ interface Props {
   lastUpdated?: Date | null;
 }
 
-function getDirectionIcon(direction: string) {
-  if (direction.includes('LONG') && direction.includes('BRL')) return <TrendingDown className="w-4 h-4" />;
-  if (direction.includes('SHORT') && direction.includes('BRL')) return <TrendingUp className="w-4 h-4" />;
+function getDirectionIcon(direction: string | undefined) {
+  if (!direction) return <Minus className="w-4 h-4" />;
+  if (direction?.includes('LONG') && direction?.includes('BRL')) return <TrendingDown className="w-4 h-4" />;
+  if (direction?.includes('SHORT') && direction?.includes('BRL')) return <TrendingUp className="w-4 h-4" />;
   return <Minus className="w-4 h-4" />;
 }
 
-function getDirectionColor(direction: string) {
-  if (direction.includes('LONG') && direction.includes('BRL')) return 'text-emerald-400';
-  if (direction.includes('SHORT') && direction.includes('BRL')) return 'text-rose-400';
+function getDirectionColor(direction: string | undefined) {
+  if (!direction) return 'text-amber-400';
+  if (direction?.includes('LONG') && direction?.includes('BRL')) return 'text-emerald-400';
+  if (direction?.includes('SHORT') && direction?.includes('BRL')) return 'text-rose-400';
   return 'text-amber-400';
 }
 
@@ -47,7 +50,7 @@ export function StatusBar({ dashboard, source = 'embedded', lastUpdated }: Props
   const d = dashboard;
   const regime = d.current_regime || d.dominant_regime || 'N/A';
   const dirColor = getDirectionColor(d.direction);
-  const scoreColor = getScoreColor(d.score_total);
+  const scoreColor = getScoreColor(d.score_total || 0);
   const regimeColor = getRegimeColor(regime);
   const { data: status } = useModelStatus();
   const runModel = useRunModel();
@@ -114,7 +117,7 @@ export function StatusBar({ dashboard, source = 'embedded', lastUpdated }: Props
             <div className={`flex items-center gap-1.5 ${dirColor}`}>
               {getDirectionIcon(d.direction)}
               <span className="text-xs font-semibold uppercase tracking-wider">
-                {d.direction}
+                {d.direction || 'NEUTRAL'}
               </span>
             </div>
           </div>
@@ -127,6 +130,14 @@ export function StatusBar({ dashboard, source = 'embedded', lastUpdated }: Props
                 {regime}
               </span>
             </div>
+            <Link
+              href="/portfolio"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border/50 hover:border-primary/50 hover:bg-primary/5 transition-all text-muted-foreground hover:text-primary"
+              title="Portfolio Management"
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline text-[10px] uppercase tracking-wider font-medium">Portfolio</span>
+            </Link>
             <button
               onClick={handleRefresh}
               disabled={isRunning}

@@ -1,20 +1,21 @@
-import { MacroDashboard } from '@/hooks/useModelData';
+import { MacroDashboard, BacktestData } from '@/hooks/useModelData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { motion } from 'framer-motion';
-import { TrendingUp, TrendingDown, Minus, Target, BarChart3, ShieldAlert, Gauge } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Target, ShieldAlert } from 'lucide-react';
 
 interface Props {
   dashboard: MacroDashboard;
+  backtest?: BacktestData | null;
 }
 
-function getDirectionStyle(direction: string) {
-  if (direction.includes('LONG') && direction.includes('BRL')) {
+function getDirectionStyle(direction: string | undefined) {
+  if (direction?.includes('LONG') && direction?.includes('BRL')) {
     return {
       bg: 'bg-emerald-400/10', border: 'border-emerald-400/30', text: 'text-emerald-400',
       icon: <TrendingDown className="w-6 h-6" />, label: 'LONG BRL', sublabel: 'Vender USD / Comprar BRL',
     };
   }
-  if (direction.includes('SHORT') && direction.includes('BRL')) {
+  if (direction?.includes('SHORT') && direction?.includes('BRL')) {
     return {
       bg: 'bg-rose-400/10', border: 'border-rose-400/30', text: 'text-rose-400',
       icon: <TrendingUp className="w-6 h-6" />, label: 'SHORT BRL', sublabel: 'Comprar USD / Vender BRL',
@@ -26,12 +27,15 @@ function getDirectionStyle(direction: string) {
   };
 }
 
-export function ActionPanel({ dashboard: d }: Props) {
+export function ActionPanel({ dashboard: d, backtest }: Props) {
   const style = getDirectionStyle(d.direction);
   const isMROS = 'positions' in d && d.positions;
   const fmtPct = (v: number | undefined | null) => v != null ? `${v > 0 ? '+' : ''}${v.toFixed(2)}%` : 'N/A';
   const fmtNum = (v: number | undefined | null, dec = 2) => v != null ? v.toFixed(dec) : 'N/A';
   const erColor = (v: number | undefined | null) => v == null ? 'text-foreground' : v > 0 ? 'text-emerald-400' : 'text-rose-400';
+
+  // Resolve overlay metrics: prefer backtest.summary.overlay, then dashboard.overlay_metrics
+  const overlayMetrics = backtest?.summary?.overlay ?? d.overlay_metrics ?? null;
 
   return (
     <motion.div
@@ -114,19 +118,35 @@ export function ActionPanel({ dashboard: d }: Props) {
             {isMROS && d.risk_metrics ? (
               <>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Portfolio Vol (ann)</span>
+                  <span className="text-xs text-muted-foreground">Overlay Vol (ann)</span>
                   <span className="font-data text-sm font-bold text-foreground">
-                    {(d.risk_metrics.portfolio_vol * 100).toFixed(2)}%
+                    {overlayMetrics?.annualized_vol != null
+                      ? `${overlayMetrics.annualized_vol.toFixed(2)}%`
+                      : `${d.risk_metrics.portfolio_vol < 1 ? (d.risk_metrics.portfolio_vol * 100).toFixed(2) : d.risk_metrics.portfolio_vol.toFixed(2)}%`}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">Max Drawdown</span>
+                  <span className="text-xs text-muted-foreground">Max DD (Overlay)</span>
                   <span className="font-data text-sm font-bold text-rose-400">
-                    {d.risk_metrics.max_drawdown != null
-                      ? `${(d.risk_metrics.max_drawdown * 100).toFixed(2)}%`
-                      : d.risk_metrics.max_drawdown_historical != null
-                        ? `${d.risk_metrics.max_drawdown_historical.toFixed(2)}%`
-                        : 'N/A'}
+                    {overlayMetrics?.max_drawdown != null
+                      ? `${overlayMetrics.max_drawdown.toFixed(2)}%`
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Sharpe (Overlay)</span>
+                  <span className="font-data text-sm font-bold text-foreground">
+                    {overlayMetrics?.sharpe != null
+                      ? overlayMetrics.sharpe.toFixed(2)
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">Calmar (Overlay)</span>
+                  <span className="font-data text-sm font-bold text-foreground">
+                    {overlayMetrics?.calmar != null
+                      ? overlayMetrics.calmar.toFixed(2)
+                      : 'N/A'}
                   </span>
                 </div>
                 {/* Stress Tests */}

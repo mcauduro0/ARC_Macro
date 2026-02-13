@@ -4,6 +4,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getLatestModelRun, getModelRunHistory } from "./db";
 import { executeModel, isModelRunning } from "./modelRunner";
+import { portfolioRouter } from "./portfolioRouter";
 
 export const appRouter = router({
   system: systemRouter,
@@ -65,6 +66,9 @@ export const appRouter = router({
           cyclical: run.cyclicalJson,
           stateVariables: run.stateVariablesJson || [],
           score: run.scoreJson || [],
+          backtest: run.backtestJson || null,
+          shapImportance: run.shapJson || null,
+          shapHistory: run.shapHistoryJson || null,
           // Legacy data for backward compatibility
           legacyDashboard: run.legacyDashboardJson,
           legacyTimeseries: run.legacyTimeseriesJson,
@@ -83,6 +87,9 @@ export const appRouter = router({
         cyclical: null,
         stateVariables: null,
         score: null,
+        backtest: null,
+        shapImportance: null,
+        shapHistory: null,
         legacyDashboard: null,
         legacyTimeseries: null,
         legacyRegime: null,
@@ -122,6 +129,8 @@ export const appRouter = router({
       return { success: true, message: "Macro Risk OS execution started" };
     }),
   }),
+
+  portfolio: portfolioRouter,
 });
 
 export type AppRouter = typeof appRouter;

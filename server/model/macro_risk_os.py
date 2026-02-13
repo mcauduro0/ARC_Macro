@@ -1603,6 +1603,8 @@ def _build_dashboard(data, states, z_states, models, expected_returns,
     cyclical_ts = _build_cyclical_timeseries(data)
     score_ts = _build_score_timeseries(data, fair_values, z_states, regime_info)
     
+    backtest_ts = _build_backtest_timeseries(data, fair_values, z_states, regime_info)
+    
     return {
         'dashboard': dashboard,
         'timeseries': timeseries,
@@ -1610,6 +1612,7 @@ def _build_dashboard(data, states, z_states, models, expected_returns,
         'state_variables_ts': state_ts,
         'cyclical_factors_ts': cyclical_ts,
         'score_ts': score_ts,
+        'backtest_ts': backtest_ts,
     }
 
 
@@ -1830,6 +1833,252 @@ def _build_score_timeseries(data, fair_values, z_states, regime_info):
             f"cycl={last.get('score_cyclical')}, regime={last.get('score_regime')}")
     
     return records
+
+
+def _build_backtest_timeseries(data, fair_values, z_states, regime_info):
+    """Build hypothetical portfolio P&L backtest by applying model signals to historical returns.
+    
+    Strategy:
+    - Each month, compute model scores (structural, cyclical, regime)
+    - Convert scores to position weights using simplified Kelly sizing
+    - Apply weights to next month's realized returns
+    - Track cumulative P&L, drawdown, and per-asset attribution
+    
+    Returns a list of dicts with: date, equity, drawdown, monthly_return,
+    fx_pnl, front_pnl, long_pnl, hard_pnl, weight_fx, weight_front, weight_long, weight_hard,
+    cdi_equity, usdbrl_equity (benchmark comparison)
+    """
+    log("\n" + "=" * 60)
+    log("BACKTEST ENGINE")
+    log("=" * 60)
+    
+    # --- Build monthly return series ---
+    spot = data.get('spot_brlusd', pd.Series(dtype=float))
+    di1y = data.get('di_1y', pd.Series(dtype=float))
+    di10y = data.get('di_10y', data.get('di_5y', pd.Series(dtype=float)))
+    embi = data.get('embi_spread', pd.Series(dtype=float))
+    selic_target = data.get('selic_target', pd.Series(dtype=float))
+    
+    returns = {}
+    if len(spot) > 24:
+        spot_m = to_monthly(spot)
+        returns['fx'] = np.log(spot_m / spot_m.shift(1))
+    if len(di1y) > 24:
+        di_m = to_monthly(di1y)
+        returns['front'] = -di_m.diff() / 100
+    if len(di10y) > 24:
+        di_m = to_monthly(di10y)
+        returns['long'] = -di_m.diff() / 100 * 7  # Duration-adjusted
+    if len(embi) > 24:
+        embi_m = to_monthly(embi)
+        returns['hard'] = -embi_m.diff() / 10000 * 5  # Spread DV01 adjusted
+    
+    if not returns:
+        log("  No return data available for backtest")
+        return []
+    
+    ret_df = pd.DataFrame(returns).dropna()
+    if len(ret_df) < 24:
+        log(f"  Insufficient return data: {len(ret_df)} months")
+        return []
+    
+    # --- Build score timeseries for signal generation ---
+    fx_fv = fair_values.get('fx', {})
+    fx_fair = fx_fv.get('fair_value', pd.Series(dtype=float))
+    regime_probs = regime_info.get('regime_probs', pd.DataFrame())
+    spot_m = to_monthly(spot)
+    
+    z_weights = {
+        'Z_X1_diferencial_real': +0.25,
+        'Z_X2_surpresa_inflacao': -0.10,
+        'Z_X3_fiscal_risk': -0.20,
+        'Z_X4_termos_de_troca': +0.15,
+        'Z_X5_dolar_global': -0.15,
+        'Z_X6_risk_global': -0.10,
+        'Z_X7_hiato': +0.05,
+    }
+    
+    # --- Score-to-weight mapping ---
+    # Fractional Kelly: weight = score * kelly_fraction / num_assets
+    kelly_fraction = 0.25  # Conservative quarter-Kelly
+    vol_target = 0.10  # 10% annualized vol target
+    max_weight = 2.0  # Max position per asset
+    
+    # Risk units (simplified static estimates)
+    risk_units = {'fx': 0.15, 'front': 0.05, 'long': 0.10, 'hard': 0.08}
+    
+    # --- Build CDI benchmark (monthly compounding from SELIC annual rate) ---
+    selic_m = to_monthly(selic_target) if len(selic_target) > 0 else pd.Series(dtype=float)
+    cdi_monthly = ((1 + selic_m / 100) ** (1/12)) - 1 if len(selic_m) > 0 else pd.Series(dtype=float)
+    
+    # --- Build USDBRL buy-and-hold benchmark ---
+    spot_m_bh = to_monthly(spot) if len(spot) > 0 else pd.Series(dtype=float)
+    usdbrl_monthly_ret = spot_m_bh.pct_change() if len(spot_m_bh) > 0 else pd.Series(dtype=float)
+    
+    log(f"  CDI benchmark: {len(cdi_monthly)} months available")
+    log(f"  USDBRL B&H benchmark: {len(usdbrl_monthly_ret.dropna())} months available")
+    
+    # --- Run backtest ---
+    equity = 1.0  # Start at 100%
+    peak = 1.0
+    cdi_equity = 1.0  # CDI benchmark starts at 100%
+    usdbrl_equity = 1.0  # USDBRL buy-and-hold starts at 100%
+    records = []
+    
+    # Lookback for score computation starts at month 60 (5 years of Z-score history)
+    start_idx = max(60, ret_df.index.get_loc(ret_df.index[0]))
+    
+    for i in range(1, len(ret_df)):
+        date = ret_df.index[i]
+        prev_date = ret_df.index[i - 1]
+        
+        # --- Compute signal at prev_date (look-ahead free) ---
+        # Structural score
+        s_structural = 0.0
+        if prev_date in fx_fair.index and prev_date in spot_m.index:
+            s = float(spot_m.get(prev_date, np.nan))
+            fv = float(fx_fair.get(prev_date, np.nan))
+            if not np.isnan(s) and not np.isnan(fv) and fv > 0:
+                misalignment = (s - fv) / fv
+                s_structural = -misalignment * 10
+        
+        # Cyclical score
+        s_cyclical = 0.0
+        z_count = 0
+        for z_key, weight in z_weights.items():
+            if z_key in z_states and prev_date in z_states[z_key].index:
+                z_val = z_states[z_key].get(prev_date, np.nan)
+                if not np.isnan(z_val):
+                    s_cyclical += float(z_val) * weight
+                    z_count += 1
+        if z_count > 0:
+            s_cyclical *= (7 / max(z_count, 1))
+        
+        # Regime score
+        s_regime = 0.0
+        if len(regime_probs) > 0 and prev_date in regime_probs.index:
+            p_carry = float(regime_probs.loc[prev_date].get('P_Carry', 0))
+            p_riskoff = float(regime_probs.loc[prev_date].get('P_RiskOff', 0))
+            p_stress = float(regime_probs.loc[prev_date].get('P_StressDom', 0))
+            s_regime = p_carry * 2.0 + p_riskoff * (-1.0) + p_stress * (-3.0)
+        
+        total_score = s_structural + s_cyclical + s_regime
+        
+        # --- Convert score to weights ---
+        # Score > 0: BRL positive (short USD, long rates, tight spreads)
+        # Score < 0: BRL negative (long USD, short rates, wide spreads)
+        # FX: negative score = long USDBRL (BRL bearish)
+        # Front/Long: negative score = short rates (rates going up)
+        # Hard: negative score = short EM sovereign (spreads widening)
+        
+        raw_weights = {}
+        raw_weights['fx'] = -total_score * kelly_fraction * 0.4  # FX gets 40% risk budget
+        raw_weights['front'] = total_score * kelly_fraction * 0.2  # Front gets 20%
+        raw_weights['long'] = total_score * kelly_fraction * 0.25  # Long gets 25%
+        raw_weights['hard'] = total_score * kelly_fraction * 0.15  # Hard gets 15%
+        
+        # Clip to max weight
+        weights = {a: np.clip(w, -max_weight, max_weight) for a, w in raw_weights.items()}
+        
+        # Scale to vol target
+        total_risk = sum(abs(weights.get(a, 0)) * risk_units.get(a, 0) for a in weights)
+        if total_risk > vol_target and total_risk > 0:
+            scale = vol_target / total_risk
+            weights = {a: w * scale for a, w in weights.items()}
+        
+        # --- Apply weights to realized returns ---
+        monthly_ret = 0.0
+        asset_pnl = {}
+        for asset in ['fx', 'front', 'long', 'hard']:
+            w = weights.get(asset, 0)
+            r = float(ret_df.loc[date].get(asset, 0)) if asset in ret_df.columns else 0.0
+            pnl = w * r
+            asset_pnl[asset] = pnl
+            monthly_ret += pnl
+        
+        # Update equity
+        equity *= (1 + monthly_ret)
+        peak = max(peak, equity)
+        drawdown = (equity - peak) / peak
+        
+        # --- Update benchmark equities ---
+        # CDI benchmark
+        if date in cdi_monthly.index:
+            cdi_ret = float(cdi_monthly.get(date, 0))
+            cdi_equity *= (1 + cdi_ret)
+        elif prev_date in cdi_monthly.index:
+            cdi_ret = float(cdi_monthly.get(prev_date, 0))
+            cdi_equity *= (1 + cdi_ret)
+        
+        # USDBRL buy-and-hold benchmark
+        if date in usdbrl_monthly_ret.index:
+            usdbrl_ret = float(usdbrl_monthly_ret.get(date, 0))
+            if not np.isnan(usdbrl_ret):
+                usdbrl_equity *= (1 + usdbrl_ret)
+        
+        records.append({
+            'date': date.strftime('%Y-%m-%d'),
+            'equity': round(equity, 4),
+            'drawdown': round(drawdown * 100, 2),
+            'monthly_return': round(monthly_ret * 100, 3),
+            'fx_pnl': round(asset_pnl.get('fx', 0) * 100, 3),
+            'front_pnl': round(asset_pnl.get('front', 0) * 100, 3),
+            'long_pnl': round(asset_pnl.get('long', 0) * 100, 3),
+            'hard_pnl': round(asset_pnl.get('hard', 0) * 100, 3),
+            'weight_fx': round(weights.get('fx', 0), 3),
+            'weight_front': round(weights.get('front', 0), 3),
+            'weight_long': round(weights.get('long', 0), 3),
+            'weight_hard': round(weights.get('hard', 0), 3),
+            'score_total': round(total_score, 2),
+            'cdi_equity': round(cdi_equity, 4),
+            'usdbrl_equity': round(usdbrl_equity, 4),
+        })
+    
+    if records:
+        # Compute summary metrics
+        monthly_rets = [r['monthly_return'] / 100 for r in records]
+        total_ret = equity - 1
+        n_years = len(records) / 12
+        ann_ret = (equity ** (1 / max(n_years, 0.5))) - 1 if equity > 0 else 0
+        ann_vol = float(np.std(monthly_rets) * np.sqrt(12))
+        sharpe = ann_ret / ann_vol if ann_vol > 0 else 0
+        max_dd = min(r['drawdown'] for r in records)
+        win_months = sum(1 for r in monthly_rets if r > 0)
+        win_rate = win_months / len(monthly_rets) if monthly_rets else 0
+        
+        # Best/worst months
+        best_month = max(records, key=lambda r: r['monthly_return'])
+        worst_month = min(records, key=lambda r: r['monthly_return'])
+        
+        summary = {
+            'total_return': round(total_ret * 100, 2),
+            'annualized_return': round(ann_ret * 100, 2),
+            'annualized_vol': round(ann_vol * 100, 2),
+            'sharpe_ratio': round(sharpe, 2),
+            'max_drawdown': round(max_dd, 2),
+            'win_rate': round(win_rate * 100, 1),
+            'total_months': len(records),
+            'best_month': {'date': best_month['date'], 'return': best_month['monthly_return']},
+            'worst_month': {'date': worst_month['date'], 'return': worst_month['monthly_return']},
+            'start_date': records[0]['date'],
+            'end_date': records[-1]['date'],
+        }
+        
+        log(f"\n  Backtest: {len(records)} months ({records[0]['date']} to {records[-1]['date']})")
+        log(f"  Total return: {total_ret*100:.2f}%, Ann return: {ann_ret*100:.2f}%")
+        log(f"  Ann vol: {ann_vol*100:.2f}%, Sharpe: {sharpe:.2f}")
+        log(f"  Max DD: {max_dd:.2f}%, Win rate: {win_rate*100:.1f}%")
+        log(f"  Best month: {best_month['date']} ({best_month['monthly_return']:.2f}%)")
+        log(f"  Worst month: {worst_month['date']} ({worst_month['monthly_return']:.2f}%)")
+        log(f"  CDI cumulative: {(cdi_equity - 1)*100:.2f}%")
+        log(f"  USDBRL B&H cumulative: {(usdbrl_equity - 1)*100:.2f}%")
+        
+        summary['cdi_total_return'] = round((cdi_equity - 1) * 100, 2)
+        summary['usdbrl_bh_total_return'] = round((usdbrl_equity - 1) * 100, 2)
+        
+        return {'timeseries': records, 'summary': summary}
+    
+    return {'timeseries': [], 'summary': {}}
 
 
 if __name__ == '__main__':

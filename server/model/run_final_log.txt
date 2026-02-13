@@ -1,0 +1,561 @@
+[RUNNER] Skipping data collection (--skip-collect flag)
+[RUNNER] Running Macro Risk OS v2.3 engine...
+
+============================================================
+BACKTEST HARNESS v2 — Walk-Forward
+============================================================
+============================================================
+DATA LAYER v2 — Loading market data
+============================================================
+    FX cupom: using Swap DI x Dólar 30d (BCB 7811) — 314 pts
+    FX cupom: cross-validation corr(swap, limpo) = 0.8685 on 289 months
+
+  Loaded 45 series
+    bcom                     :  6562 pts, 2000-01 → 2026-02
+    bop_current              :   312 pts, 2000-01 → 2025-12
+    breakeven_10y            :     1 pts, 2024-03 → 2024-03
+    breakeven_5y             :     1 pts, 2024-03 → 2024-03
+    cds_5y                   :  8125 pts, 1994-04 → 2026-02
+    debt_gdp                 :  6560 pts, 2000-01 → 2026-02
+    di_10y                   :   314 pts, 2000-01 → 2026-02
+    di_1y                    :   314 pts, 2000-01 → 2026-02
+    di_2y                    :   314 pts, 2000-01 → 2026-02
+    di_3m                    :   314 pts, 2000-01 → 2026-02
+    di_5y                    :   314 pts, 2000-01 → 2026-02
+    di_6m                    :   314 pts, 2000-01 → 2026-02
+    di_swap_360d             :  4956 pts, 2000-01 → 2019-09
+    di_swap_90d              :  5644 pts, 2001-01 → 2023-06
+    dxy                      :  6596 pts, 2000-01 → 2026-02
+    embi_spread              :  8125 pts, 1994-04 → 2026-02
+    ewz                      :  4053 pts, 2010-01 → 2026-02
+    fx_cupom_1m              :   314 pts, 2000-01 → 2026-02
+    ibc_br                   :   275 pts, 2003-01 → 2025-11
+    ipca_exp                 :   313 pts, 2000-01 → 2026-01
+    ipca_monthly             :   253 pts, 2005-01 → 2026-01
+    ipca_yoy                 :   302 pts, 2000-12 → 2026-01
+    iron_ore                 :  4053 pts, 2010-01 → 2026-02
+    nfci                     :   841 pts, 2010-01 → 2026-02
+    ntnb_10y                 :     1 pts, 2024-03 → 2024-03
+    ntnb_5y                  :     1 pts, 2024-03 → 2024-03
+    ppp_factor               :    35 pts, 1990-01 → 2024-01
+    primary_balance          :   278 pts, 2002-11 → 2025-12
+    ptax                     :  6561 pts, 2000-01 → 2026-02
+    reer                     :   372 pts, 1995-01 → 2025-12
+    selic_over               :   314 pts, 2000-01 → 2026-02
+    selic_target             :  6561 pts, 2000-01 → 2026-02
+    spot                     :  4194 pts, 2010-01 → 2026-02
+    swap_dixdol_360d         :   314 pts, 2000-01 → 2026-02
+    swap_dixdol_90d          :   314 pts, 2000-01 → 2026-02
+    tot                      :   311 pts, 2000-01 → 2025-11
+    us_breakeven_10y         :  4030 pts, 2010-01 → 2026-02
+    us_cpi_exp               :   192 pts, 2010-01 → 2025-12
+    us_hy_spread             :  4208 pts, 2010-01 → 2026-02
+    us_tips_10y              :  4029 pts, 2010-01 → 2026-02
+    us_tips_5y               :  4029 pts, 2010-01 → 2026-02
+    ust_10y                  :  4029 pts, 2010-01 → 2026-02
+    ust_2y                   :  4029 pts, 2010-01 → 2026-02
+    ust_5y                   :  4029 pts, 2010-01 → 2026-02
+    vix                      :  4080 pts, 2010-01 → 2026-02
+
+  Building monthly aligned data...
+    ipca_yoy computed from monthly: 242 months, current=4.44%
+    ppp_factor interpolated: 35 → 409 monthly points
+
+  Computing instrument returns...
+    cash (CDI): 314 months
+    fx: using cupom cambial (Swap DI x Dólar 30d) for carry, 314 months
+    fx (NDF 1M long USD): 313 months
+    front (receiver 1Y): 313 months
+    belly (receiver 5Y): 313 months
+    long (receiver 10Y): 313 months
+    hard (sovereign spread): 382 months
+
+  Aligned return matrix: 313 months x 5 instruments
+  Period: 2000-02 → 2026-02
+    fx      : ann_ret=  5.30%, ann_vol= 16.90%, SR= 0.31
+    front   : ann_ret= 10.67%, ann_vol=  1.78%, SR= 6.00
+    belly   : ann_ret= 12.26%, ann_vol=  5.48%, SR= 2.24
+    long    : ann_ret= 13.10%, ann_vol=  9.10%, SR= 1.44
+    hard    : ann_ret=  5.95%, ann_vol=  7.97%, SR= 0.75
+
+============================================================
+FEATURE ENGINE v2.2
+============================================================
+
+  Building Z-score features...
+    Z_dxy                    : 285 months
+    Z_vix                    : 165 months
+    Z_cds_br                 : 354 months
+    Z_real_diff              : 163 months
+    Z_infl_surprise          : 213 months
+    Z_fiscal                 : 285 months
+    Z_tot                    : 282 months
+    Z_hy_spread              : 165 months
+    Z_ewz                    : 164 months
+    Z_iron_ore               : 164 months
+    Z_bop                    : 283 months
+
+  Building FX valuation signal...
+    fx_fair: 140 months, current=3.5931
+    val_fx: mean=-0.1674, current=-0.3211
+    mu_fx_val: mean=-0.32%, current=-0.62%
+
+  Building carry features...
+    carry_fx: 194 months, mean=-0.670%/m
+    carry_front: 314 months, mean=0.941%/m
+    carry_belly: 314 months, mean=0.941%/m
+    carry_long: 314 months, mean=0.981%/m
+    carry_hard: 383 months, mean=0.382%/m
+
+  Building CIP basis feature...
+    Z_cip_basis: 88 months
+    cip_basis: mean=190.964%, current=431.684%
+
+  Building BEER cointegration signal...
+    beer_misalignment: 102 months
+    Z_beer: mean=-0.0047, current=-0.0101
+
+  Building REER gap signal...
+    reer_gap: 337 months, current=0.0127
+
+  Building term premium proxy...
+    term_premium_5y: 303 months, current=2.02pp
+    term_premium_slope: 314 months, current=0.50pp
+
+  Building breakeven decomposition...
+    us_irp: 192 months, current=-1.95pp
+    us_real_yield: 194 months
+    Z_us_breakeven: 194 months
+
+  Building fiscal premium signal...
+    fiscal_premium: 194 months, current=9.22pp
+    Z_pb_momentum: 266 months
+    Z_debt_accel: 302 months
+
+  Building Taylor Rule rates equilibrium...
+    Taylor SELIC*: 242 months, current=9.86%
+    Taylor gap: -9.80pp (positive = tight, negative = loose)
+    Belly fair (SELIC* + TP_5Y): 20.11%
+    Long fair (SELIC* + TP_10Y): 20.59%
+
+  Feature matrix: 383 months x 44 features
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2005-02-28 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (0 months)
+  Domestic: Insufficient data (0 months)
+  Both HMMs failed — using uniform priors
+  Backtest period: 2005-02 → 2026-02 (253 months)
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2006-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (0 months)
+  Domestic: Insufficient data (0 months)
+  Both HMMs failed — using uniform priors
+  [2007-01] overlay=1.0000, total=1.0012, dd=0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2007-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (0 months)
+  Domestic: Insufficient data (0 months)
+  Both HMMs failed — using uniform priors
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2008-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (0 months)
+  Domestic: Insufficient data (0 months)
+  Both HMMs failed — using uniform priors
+  [2009-01] overlay=1.0000, total=1.0021, dd=0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2009-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (0 months)
+  Domestic: Insufficient data (0 months)
+  Both HMMs failed — using uniform priors
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2010-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (0 months)
+  Domestic: Insufficient data (0 months)
+  Both HMMs failed — using uniform priors
+  [2011-01] overlay=1.0000, total=1.0029, dd=0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2011-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (12 months)
+  Domestic: Insufficient data (10 months)
+  Both HMMs failed — using uniform priors
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2012-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (24 months)
+  Domestic: Insufficient data (22 months)
+  Both HMMs failed — using uniform priors
+  [2013-01] overlay=1.0000, total=1.0036, dd=0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2013-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (36 months)
+  Domestic: Insufficient data (34 months)
+  Both HMMs failed — using uniform priors
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2014-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+  Global: Insufficient data (48 months)
+  Domestic: Insufficient data (46 months)
+  Both HMMs failed — using uniform priors
+  [2015-01] overlay=1.0000, total=1.0044, dd=0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2015-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+Model is not converging.  Current: -336.91913152073226 is not greater than -288.4641833908989. Delta is -48.45494812983338
+    Global carry       : dominant in 28/60 months (46.7%)
+    Global riskoff     : dominant in 5/60 months (8.3%)
+    Global stress      : dominant in 27/60 months (45.0%)
+  Domestic: Insufficient data (58 months)
+
+  Combined regime (latest):
+    P_carry: 100.0%
+    P_stress: 0.0%
+    P_riskoff: 0.0%
+    P_domestic_calm: 50.0%
+    P_domestic_stress: 50.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2016-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 28/72 months (38.9%)
+    Global riskoff     : dominant in 13/72 months (18.1%)
+    Global stress      : dominant in 31/72 months (43.1%)
+    Domestic domestic_calm: dominant in 24/70 months (34.3%)
+    Domestic domestic_stress: dominant in 46/70 months (65.7%)
+
+  Combined regime (latest):
+    P_carry: 100.0%
+    P_stress: 0.0%
+    P_riskoff: 0.0%
+    P_domestic_calm: 0.0%
+    P_domestic_stress: 100.0%
+  [2017-01] overlay=1.6917, total=1.7008, dd=0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2017-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 38/84 months (45.2%)
+    Global riskoff     : dominant in 21/84 months (25.0%)
+    Global stress      : dominant in 25/84 months (29.8%)
+    Domestic domestic_calm: dominant in 69/82 months (84.1%)
+    Domestic domestic_stress: dominant in 13/82 months (15.9%)
+
+  Combined regime (latest):
+    P_carry: 0.0%
+    P_stress: 100.0%
+    P_riskoff: 0.0%
+    P_domestic_calm: 0.0%
+    P_domestic_stress: 100.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2018-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 30/96 months (31.2%)
+    Global riskoff     : dominant in 38/96 months (39.6%)
+    Global stress      : dominant in 28/96 months (29.2%)
+    Domestic domestic_calm: dominant in 32/94 months (34.0%)
+    Domestic domestic_stress: dominant in 62/94 months (66.0%)
+
+  Combined regime (latest):
+    P_carry: 100.0%
+    P_stress: 0.0%
+    P_riskoff: 0.0%
+    P_domestic_calm: 99.9%
+    P_domestic_stress: 0.1%
+  [2019-01] overlay=2.5154, total=2.5304, dd=-4.9%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2019-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 32/108 months (29.6%)
+    Global riskoff     : dominant in 42/108 months (38.9%)
+    Global stress      : dominant in 34/108 months (31.5%)
+    Domestic domestic_calm: dominant in 50/106 months (47.2%)
+    Domestic domestic_stress: dominant in 56/106 months (52.8%)
+
+  Combined regime (latest):
+    P_carry: 0.0%
+    P_stress: 100.0%
+    P_riskoff: 0.0%
+    P_domestic_calm: 100.0%
+    P_domestic_stress: 0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2020-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 38/120 months (31.7%)
+    Global riskoff     : dominant in 42/120 months (35.0%)
+    Global stress      : dominant in 40/120 months (33.3%)
+    Domestic domestic_calm: dominant in 105/118 months (89.0%)
+    Domestic domestic_stress: dominant in 13/118 months (11.0%)
+
+  Combined regime (latest):
+    P_carry: 100.0%
+    P_stress: 0.0%
+    P_riskoff: 0.0%
+    P_domestic_calm: 100.0%
+    P_domestic_stress: 0.0%
+  [2021-01] overlay=3.0217, total=3.0408, dd=-2.8%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2021-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 43/132 months (32.6%)
+    Global riskoff     : dominant in 48/132 months (36.4%)
+    Global stress      : dominant in 41/132 months (31.1%)
+    Domestic domestic_calm: dominant in 8/130 months (6.2%)
+    Domestic domestic_stress: dominant in 122/130 months (93.8%)
+
+  Combined regime (latest):
+    P_carry: 0.0%
+    P_stress: 0.0%
+    P_riskoff: 100.0%
+    P_domestic_calm: 100.0%
+    P_domestic_stress: 0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2022-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 66/144 months (45.8%)
+    Global riskoff     : dominant in 18/144 months (12.5%)
+    Global stress      : dominant in 60/144 months (41.7%)
+    Domestic domestic_calm: dominant in 11/142 months (7.7%)
+    Domestic domestic_stress: dominant in 131/142 months (92.3%)
+
+  Combined regime (latest):
+    P_carry: 13.4%
+    P_stress: 86.6%
+    P_riskoff: 0.0%
+    P_domestic_calm: 0.0%
+    P_domestic_stress: 100.0%
+  [2023-01] overlay=4.1724, total=4.2016, dd=0.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2023-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 91/156 months (58.3%)
+    Global riskoff     : dominant in 32/156 months (20.5%)
+    Global stress      : dominant in 33/156 months (21.2%)
+    Domestic domestic_calm: dominant in 11/154 months (7.1%)
+    Domestic domestic_stress: dominant in 143/154 months (92.9%)
+
+  Combined regime (latest):
+    P_carry: 0.8%
+    P_stress: 99.2%
+    P_riskoff: 0.0%
+    P_domestic_calm: 0.0%
+    P_domestic_stress: 100.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2024-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 78/168 months (46.4%)
+    Global riskoff     : dominant in 25/168 months (14.9%)
+    Global stress      : dominant in 65/168 months (38.7%)
+    Domestic domestic_calm: dominant in 11/166 months (6.6%)
+    Domestic domestic_stress: dominant in 155/166 months (93.4%)
+
+  Combined regime (latest):
+    P_carry: 0.1%
+    P_stress: 99.9%
+    P_riskoff: 0.0%
+    P_domestic_calm: 0.0%
+    P_domestic_stress: 100.0%
+  [2025-01] overlay=6.0813, total=6.1292, dd=-1.7%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2025-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 59/180 months (32.8%)
+    Global riskoff     : dominant in 54/180 months (30.0%)
+    Global stress      : dominant in 67/180 months (37.2%)
+    Domestic domestic_calm: dominant in 11/178 months (6.2%)
+    Domestic domestic_stress: dominant in 167/178 months (93.8%)
+
+  Combined regime (latest):
+    P_carry: 0.1%
+    P_stress: 99.9%
+    P_riskoff: 0.0%
+    P_domestic_calm: 0.0%
+    P_domestic_stress: 100.0%
+
+============================================================
+REGIME MODEL v2.3 (Two-Level HMM — Expanding Window)
+============================================================
+  Fitting with data up to 2026-01-31 00:00:00 (no look-ahead)
+
+  Level 1: Global Regime (3-state)
+  Level 2: Domestic Regime (2-state)
+    Global carry       : dominant in 74/192 months (38.5%)
+    Global riskoff     : dominant in 52/192 months (27.1%)
+    Global stress      : dominant in 66/192 months (34.4%)
+    Domestic domestic_calm: dominant in 11/189 months (5.8%)
+    Domestic domestic_stress: dominant in 178/189 months (94.2%)
+
+  Combined regime (latest):
+    P_carry: 1.9%
+    P_stress: 98.0%
+    P_riskoff: 0.1%
+    P_domestic_calm: 0.0%
+    P_domestic_stress: 100.0%
+
+============================================================
+BACKTEST SUMMARY v2.3
+============================================================
+  Period: 2005-02-28 → 2026-02-28 (253 months)
+
+  OVERLAY (excess over CDI):
+    Total return: 591.53%
+    Ann return:   9.61%
+    Ann vol:      5.35%
+    Sharpe:       1.79
+    Max DD:       -6.42%
+    Calmar:       1.50
+    Win rate:     39.1%
+
+  TOTAL (CDI + overlay):
+    Total return: 597.38%
+    Ann return:   9.65%
+    Sharpe:       1.80
+
+  IC per instrument: {'fx': -0.0111, 'front': 0.1191, 'belly': 0.4391, 'long': 0.5006, 'hard': -0.0211}
+  Hit rates: {'fx': 3.2, 'front': 37.9, 'belly': 34.8, 'long': 33.2, 'hard': 27.3}
+  Attribution: {'fx': -0.57, 'front': 57.09, 'belly': 71.15, 'long': 58.07, 'hard': 11.3}
+  Total TC: 2.60%
+  Avg monthly turnover: 0.3186
+
+  ENSEMBLE WEIGHTS:
+    Avg Ridge: 0.459
+    Avg GBM:   0.541
+    Final Ridge: 0.392
+    Final GBM:   0.608
+
+  SCORE DEMEANING:
+    Raw score mean:     1.166
+    Raw score std:      2.560
+    Demeaned score mean: 0.005
+    Demeaned score std:  0.051
+
+  TWO-LEVEL REGIME:
+    Global carry:    19.0%
+    Global riskoff:  4.7%
+    Global stress:   28.9%
+    Domestic calm:   19.0%
+    Domestic stress: 28.9%
+
+============================================================
+STRESS TEST ENGINE
+============================================================
+  Stress: Taper Tantrum → overlay 0.00%, max DD 0.00%
+  Stress: Crise Dilma / Impeachment → overlay 11.27%, max DD -4.13%
+  Stress: Joesley Day → overlay 8.61%, max DD 0.00%
+  Stress: COVID-19 Crash → overlay 17.62%, max DD 0.00%
+  Stress: Fed Hiking Cycle → overlay 18.17%, max DD 0.00%
+  Stress: Fiscal Concerns Lula → overlay 8.07%, max DD 0.00%
+  State variables timeseries: 383 points
+  Cyclical factors timeseries: 383 points
+  Fair value timeseries: 314 points
+  Score timeseries: 253 points
+[RUNNER] Complete. v2.3 overlay=591.5%, Sharpe=1.79

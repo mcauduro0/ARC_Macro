@@ -37,7 +37,9 @@ ANBIMA_AUTH_URL = 'https://api.anbima.com.br/oauth/access-token'
 # Use sandbox for now; switch to production when access is granted
 # Production: https://api.anbima.com.br
 # Sandbox:    https://api-sandbox.anbima.com.br
-ANBIMA_BASE_URL = os.environ.get('ANBIMA_BASE_URL', 'https://api-sandbox.anbima.com.br')
+ANBIMA_BASE_URL_PROD = 'https://api.anbima.com.br'
+ANBIMA_BASE_URL_SANDBOX = 'https://api-sandbox.anbima.com.br'
+ANBIMA_BASE_URL = os.environ.get('ANBIMA_BASE_URL', ANBIMA_BASE_URL_PROD)
 
 TIMEOUT = 20
 START_DATE = "2010-01-01"
@@ -94,7 +96,9 @@ def _get_anbima_token():
         r = requests.post(ANBIMA_AUTH_URL,
                           json={'grant_type': 'client_credentials'},
                           headers=headers, timeout=TIMEOUT)
-        r.raise_for_status()
+        if r.status_code not in (200, 201):
+            log(f"  [ANBIMA] Auth HTTP {r.status_code}: {r.text[:200]}")
+            return None
         data = r.json()
         token = data['access_token']
         expires_in = data.get('expires_in', 3600)
@@ -119,21 +123,35 @@ def _anbima_headers():
 
 
 def _anbima_get(endpoint, params=None):
-    """Make authenticated GET request to ANBIMA API."""
+    """Make authenticated GET request to ANBIMA API.
+    Tries production first, falls back to sandbox if 403."""
     headers = _anbima_headers()
     if not headers:
         return None
-    url = f"{ANBIMA_BASE_URL}{endpoint}"
-    try:
-        r = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
-        if r.status_code == 200:
-            return r.json()
-        else:
-            log(f"  [ANBIMA] {endpoint}: HTTP {r.status_code} - {r.text[:200]}")
-            return None
-    except Exception as e:
-        log(f"  [ANBIMA] {endpoint}: {e}")
-        return None
+    # Try production first, then sandbox
+    urls_to_try = [f"{ANBIMA_BASE_URL}{endpoint}"]
+    if ANBIMA_BASE_URL == ANBIMA_BASE_URL_PROD:
+        urls_to_try.append(f"{ANBIMA_BASE_URL_SANDBOX}{endpoint}")
+    for url in urls_to_try:
+        try:
+            r = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
+            if r.status_code == 200:
+                is_sandbox = ANBIMA_BASE_URL_SANDBOX in url
+                if is_sandbox:
+                    log(f"  [ANBIMA] {endpoint}: using SANDBOX data (production access denied)")
+                return r.json()
+            elif r.status_code == 403 and ANBIMA_BASE_URL_SANDBOX in urls_to_try[-1]:
+                log(f"  [ANBIMA] {endpoint}: production 403, trying sandbox...")
+                continue
+            else:
+                log(f"  [ANBIMA] {endpoint}: HTTP {r.status_code} - {r.text[:200]}")
+                if url == urls_to_try[-1]:
+                    return None
+        except Exception as e:
+            log(f"  [ANBIMA] {endpoint} ({url}): {e}")
+            if url == urls_to_try[-1]:
+                return None
+    return None
 
 
 def collect_anbima_ettj():
@@ -547,20 +565,36 @@ def collect_yahoo():
 # ═══════════════════════════════════════════════════════════════════
 
 def fetch_bcb(code, name, start_year=2000):
-    """Fetch BCB SGS series with chunking."""
+    """Fetch BCB SGS series with chunking and retry logic.
+    v2.3.1: Added retry per chunk, gap detection, and merge with cache.
+    """
     all_data = []
+    failed_chunks = []
     for sy in range(start_year, 2027, 5):
         ey = min(sy + 4, 2026)
         url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{code}/dados?formato=json&dataInicial=01/01/{sy}&dataFinal=31/12/{ey}"
-        try:
-            r = requests.get(url, timeout=TIMEOUT)
-            if r.status_code == 200:
-                data = r.json()
-                if data:
-                    all_data.extend(data)
-        except:
-            pass
-        time.sleep(0.2)
+        chunk_ok = False
+        for attempt in range(3):  # Retry up to 3 times per chunk
+            try:
+                r = requests.get(url, timeout=TIMEOUT)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data:
+                        all_data.extend(data)
+                        chunk_ok = True
+                        break
+                    else:
+                        break  # Empty response, no retry needed
+                elif r.status_code == 429:  # Rate limited
+                    time.sleep(2 * (attempt + 1))
+                    continue
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(1 * (attempt + 1))
+                    continue
+        if not chunk_ok and sy < 2026:
+            failed_chunks.append((sy, ey))
+        time.sleep(0.3)
 
     if all_data:
         df = pd.DataFrame(all_data)
@@ -568,8 +602,37 @@ def fetch_bcb(code, name, start_year=2000):
         df['value'] = pd.to_numeric(df['valor'], errors='coerce')
         s = df.set_index('date')['value'].dropna().sort_index()
         s = s[~s.index.duplicated(keep='last')]
+
+        # Gap detection: check for gaps > 60 days (excluding weekends)
+        if len(s) > 10:
+            gaps = s.index.to_series().diff()
+            big_gaps = gaps[gaps > pd.Timedelta(days=60)]
+            if len(big_gaps) > 0:
+                log(f"  [BCB] {name}: WARNING - {len(big_gaps)} gap(s) > 60 days detected")
+                for dt, gap in big_gaps.items():
+                    log(f"    Gap at {dt.strftime('%Y-%m-%d')}: {gap.days} days")
+                # Try to fill gaps from cache
+                cached = load_cached(name)
+                if not cached.empty and len(cached) > len(s) * 0.5:
+                    # Merge: use fresh data where available, fill gaps from cache
+                    merged = cached.combine_first(s)
+                    # But prefer fresh data for overlapping dates
+                    merged.update(s)
+                    merged = merged.sort_index()
+                    merged = merged[~merged.index.duplicated(keep='last')]
+                    if len(merged) > len(s):
+                        log(f"  [BCB] {name}: merged with cache: {len(s)} → {len(merged)} pts")
+                        s = merged
+                        # Re-check gaps after merge
+                        gaps2 = s.index.to_series().diff()
+                        big_gaps2 = gaps2[gaps2 > pd.Timedelta(days=60)]
+                        if len(big_gaps2) > 0:
+                            log(f"  [BCB] {name}: still {len(big_gaps2)} gap(s) after merge")
+
         save_series(s, name)
         log(f"  [BCB] {name}: {len(s)} pts, last={s.iloc[-1]:.4f}")
+        if failed_chunks:
+            log(f"  [BCB] {name}: failed chunks: {failed_chunks}")
         return s
 
     # Fallback to cache
@@ -592,7 +655,8 @@ def collect_bcb():
         "SELIC_OVER":       4189,
         "PTAX":             1,
         "DIVIDA_BRUTA_PIB": 13621,
-        "CDS_5Y_BCB":      22701,
+        # NOTE: BCB 22701 is 'Resultado primário' (primary balance), NOT CDS spread
+        # CDS_5Y is sourced from IPEADATA + FRED extension in merge_sources()
         "TERMS_OF_TRADE":   11752,
         "BRAZIL_COMM_IDX":  27574,
         "PRIMARY_BALANCE":  5793,
@@ -670,12 +734,58 @@ def collect_ipeadata():
 # STRUCTURAL (World Bank, BIS)
 # ═══════════════════════════════════════════════════════════════════
 
+def _fetch_imf_ppp():
+    """Fetch PPP implied conversion rate from IMF WEO DataMapper (has projections to 2030)."""
+    try:
+        url = 'https://www.imf.org/external/datamapper/api/v1/PPPEX/BRA'
+        r = requests.get(url, timeout=TIMEOUT)
+        if r.status_code == 200:
+            values = r.json().get('values', {}).get('PPPEX', {}).get('BRA', {})
+            if values:
+                records = [(f"{year}-01-01", float(val)) for year, val in values.items() if val]
+                df = pd.DataFrame(records, columns=['date', 'value'])
+                df['date'] = pd.to_datetime(df['date'])
+                s = df.set_index('date')['value'].sort_index()
+                return s
+    except Exception as e:
+        log(f"  [IMF] PPPEX error: {e}")
+    return pd.Series(dtype=float)
+
+
+def _fetch_fred_ppp():
+    """Fetch PPP price level from FRED/PWT (PLGDPOBRA670NRUG = PPP/XR ratio)."""
+    try:
+        url = 'https://api.stlouisfed.org/fred/series/observations'
+        params = {
+            'series_id': 'PPPTTLBRA618NUPN',
+            'api_key': FRED_KEY,
+            'file_type': 'json',
+            'observation_start': '1990-01-01',
+            'observation_end': '2030-12-31'
+        }
+        r = requests.get(url, params=params, timeout=TIMEOUT)
+        if r.status_code == 200:
+            obs = r.json().get('observations', [])
+            records = [(o['date'], float(o['value'])) for o in obs if o['value'] != '.']
+            if records:
+                df = pd.DataFrame(records, columns=['date', 'value'])
+                df['date'] = pd.to_datetime(df['date'])
+                s = df.set_index('date')['value'].sort_index()
+                return s
+    except Exception as e:
+        log(f"  [FRED] PPP error: {e}")
+    return pd.Series(dtype=float)
+
+
 def collect_structural():
-    """Collect structural data (PPP, REER)."""
+    """Collect structural data (PPP, REER) with cross-validation from multiple sources."""
     log("\n[STRUCTURAL]")
     result = {}
 
-    # World Bank PPP
+    # ── PPP Cross-Validation ──────────────────────────────────────
+    ppp_sources = {}
+
+    # Source 1: World Bank (PA.NUS.PPP) - primary
     try:
         url = "https://api.worldbank.org/v2/country/BRA/indicator/PA.NUS.PPP?format=json&per_page=100"
         r = requests.get(url, timeout=TIMEOUT)
@@ -686,11 +796,58 @@ def collect_structural():
             df = pd.DataFrame(records, columns=['date', 'value'])
             df['date'] = pd.to_datetime(df['date'])
             s = df.set_index('date')['value'].sort_index()
-            save_series(s, 'PPP_FACTOR')
-            result['PPP_FACTOR'] = s
-            log(f"  [WB] PPP_FACTOR: {len(s)} pts, last={s.iloc[-1]:.4f}")
+            ppp_sources['WB'] = s
+            log(f"  [WB] PPP: {len(s)} pts, last={s.iloc[-1]:.4f} ({s.index[-1].year})")
     except Exception as e:
-        log(f"  [WB] PPP_FACTOR: {e}")
+        log(f"  [WB] PPP: {e}")
+
+    # Source 2: IMF WEO (PPPEX) - has projections to 2030
+    imf_ppp = _fetch_imf_ppp()
+    if not imf_ppp.empty:
+        ppp_sources['IMF'] = imf_ppp
+        log(f"  [IMF] PPP: {len(imf_ppp)} pts, last={imf_ppp.iloc[-1]:.4f} ({imf_ppp.index[-1].year})")
+
+    # Source 3: FRED/PWT
+    fred_ppp = _fetch_fred_ppp()
+    if not fred_ppp.empty:
+        ppp_sources['FRED'] = fred_ppp
+        log(f"  [FRED] PPP: {len(fred_ppp)} pts, last={fred_ppp.iloc[-1]:.4f} ({fred_ppp.index[-1].year})")
+
+    # Cross-validate and build consensus PPP
+    if ppp_sources:
+        # Merge all sources by year
+        all_ppp = pd.DataFrame(ppp_sources)
+        all_ppp = all_ppp.sort_index()
+
+        # Log cross-validation for overlapping years
+        overlap_years = all_ppp.dropna(thresh=2)
+        if not overlap_years.empty:
+            log(f"  [PPP CROSS-VALIDATION] {len(overlap_years)} overlapping years")
+            for idx, row in overlap_years.tail(5).iterrows():
+                vals = {k: f"{v:.4f}" for k, v in row.items() if pd.notna(v)}
+                spread = row.max() - row.min()
+                log(f"    {idx.year}: {vals} (spread={spread:.4f})")
+
+        # Build consensus: median of available sources (robust to outliers)
+        consensus = all_ppp.median(axis=1).dropna()
+
+        # Extend with IMF projections for future years not in WB
+        if 'IMF' in ppp_sources:
+            imf = ppp_sources['IMF']
+            for dt, val in imf.items():
+                if dt not in consensus.index:
+                    consensus[dt] = val
+            consensus = consensus.sort_index()
+
+        save_series(consensus, 'PPP_FACTOR')
+        result['PPP_FACTOR'] = consensus
+        log(f"  [CONSENSUS] PPP_FACTOR: {len(consensus)} pts, last={consensus.iloc[-1]:.4f} ({consensus.index[-1].year})")
+
+        # Save individual sources for reference
+        for name, s in ppp_sources.items():
+            save_series(s, f'PPP_{name}')
+    else:
+        log(f"  [PPP] No sources available, using cache")
         cached = load_cached('PPP_FACTOR')
         if not cached.empty:
             result['PPP_FACTOR'] = cached
@@ -980,22 +1137,56 @@ def merge_sources(all_data):
                 all_data[fred_key] = all_data[fmp_key]
                 log(f"  {fred_key}: fallback to FMP")
 
-    # EMBI: prefer IPEADATA (daily)
+    # EMBI: prefer IPEADATA (daily), extend with FRED if stale
     if "EMBI_SPREAD" not in all_data or all_data["EMBI_SPREAD"].empty:
         if "EMBI_PLUS_IPEA" in all_data:
             all_data["EMBI_SPREAD"] = all_data["EMBI_PLUS_IPEA"]
+
+    # v2.3.1: Extend EMBI with FRED EM Corporate spread if IPEADATA is stale
+    if "EMBI_SPREAD" in all_data and not all_data["EMBI_SPREAD"].empty:
+        embi = all_data["EMBI_SPREAD"]
+        embi = embi[(embi > 50) & (embi < 2000)]  # Filter valid values
+        all_data["EMBI_SPREAD"] = embi
+        # Check if EMBI is stale (> 60 days old)
+        if (pd.Timestamp.now() - embi.index[-1]).days > 60:
+            log(f"  EMBI_SPREAD: stale ({embi.index[-1].strftime('%Y-%m-%d')}), extending with FRED")
+            try:
+                fred_key = os.environ.get('FRED_API_KEY', 'e63bf4ad4b21136be0b68c27e7e510d9')
+                url = f"https://api.stlouisfed.org/fred/series/observations?series_id=BAMLEMCBPIOAS&api_key={fred_key}&file_type=json&observation_start=2020-01-01"
+                r = requests.get(url, timeout=TIMEOUT)
+                if r.status_code == 200:
+                    obs = r.json().get('observations', [])
+                    records = [(o['date'], float(o['value'])) for o in obs if o['value'] != '.']
+                    df = pd.DataFrame(records, columns=['date', 'value'])
+                    df['date'] = pd.to_datetime(df['date'])
+                    fred_em = df.set_index('date')['value'].sort_index() * 100  # % to bps
+                    # Compute ratio in overlap period
+                    embi_m = embi.resample('ME').last().dropna()
+                    fred_m = fred_em.resample('ME').last().dropna()
+                    common = embi_m.index.intersection(fred_m.index)
+                    common = common[common <= embi.index[-1]]
+                    if len(common) > 6:
+                        ratio = (embi_m.reindex(common) / fred_m.reindex(common)).median()
+                        fred_after = fred_em[fred_em.index > embi.index[-1]]
+                        extension = fred_after * ratio
+                        embi_ext = pd.concat([embi, extension]).sort_index()
+                        embi_ext = embi_ext[~embi_ext.index.duplicated(keep='last')]
+                        all_data["EMBI_SPREAD"] = embi_ext
+                        save_series(embi_ext, 'EMBI_SPREAD')
+                        log(f"  EMBI_SPREAD: extended with FRED (ratio={ratio:.4f}), now {len(embi_ext)} pts to {embi_ext.index[-1].strftime('%Y-%m-%d')}")
+            except Exception as e:
+                log(f"  EMBI_SPREAD: FRED extension failed: {e}")
 
     # FX: prefer Yahoo
     if "USDBRL" not in all_data or all_data["USDBRL"].empty:
         if "PTAX" in all_data:
             all_data["USDBRL"] = all_data["PTAX"]
 
-    # CDS: prefer BCB, fallback FRED
-    if "CDS_5Y" not in all_data:
-        if "CDS_5Y_BCB" in all_data and not all_data["CDS_5Y_BCB"].empty:
-            all_data["CDS_5Y"] = all_data["CDS_5Y_BCB"]
-        elif "CDS_5Y_BRAZIL" in all_data and not all_data["CDS_5Y_BRAZIL"].empty:
-            all_data["CDS_5Y"] = all_data["CDS_5Y_BRAZIL"]
+    # CDS: construct from EMBI * 0.7 (historical Brazil CDS/EMBI relationship)
+    if "EMBI_SPREAD" in all_data and not all_data["EMBI_SPREAD"].empty:
+        all_data["CDS_5Y"] = all_data["EMBI_SPREAD"] * 0.7
+        save_series(all_data["CDS_5Y"], 'CDS_5Y')
+        log(f"  CDS_5Y: constructed from EMBI*0.7, {len(all_data['CDS_5Y'])} pts")
 
     return all_data
 

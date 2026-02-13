@@ -1,7 +1,7 @@
 /**
  * BRLUSD Institutional FX Model Dashboard
  * Design: "Institutional Command Center" - Dark slate theme
- * Hierarchy: Status Bar → Overview Grid → Detail Charts → Stress Tests → Action Panel
+ * Hierarchy: Status Bar → Overview Grid → Detail Charts → Stress Tests → SHAP → Action Panel
  */
 
 import { useModelData } from '@/hooks/useModelData';
@@ -9,12 +9,15 @@ import { StatusBar } from '@/components/StatusBar';
 import { OverviewGrid } from '@/components/OverviewGrid';
 import { ChartsSection } from '@/components/ChartsSection';
 import { StressTestPanel } from '@/components/StressTestPanel';
+import { BacktestPanel } from '@/components/BacktestPanel';
+import { ShapPanel } from '@/components/ShapPanel';
+import { ShapHistoryPanel } from '@/components/ShapHistoryPanel';
 import { ActionPanel } from '@/components/ActionPanel';
 import { ModelDetails } from '@/components/ModelDetails';
 import { Loader2 } from 'lucide-react';
 
 export default function Home() {
-  const { dashboard, timeseries, regimeProbs, cyclicalFactors, stateVariables, score, loading, error, source, lastUpdated } = useModelData();
+  const { dashboard, timeseries, regimeProbs, cyclicalFactors, stateVariables, score, backtest, shapImportance, shapHistory, loading, error, source, lastUpdated } = useModelData();
 
   if (loading) {
     return (
@@ -59,11 +62,20 @@ export default function Home() {
           score={score}
         />
 
+        {/* Backtest - Hypothetical P&L */}
+        <BacktestPanel backtest={backtest} />
+
+        {/* SHAP Feature Importance - Model Drivers */}
+        <ShapPanel shapImportance={shapImportance} />
+
+        {/* SHAP Temporal Evolution - Structural Changes */}
+        <ShapHistoryPanel shapHistory={shapHistory} />
+
         {/* Stress Tests - Historical scenarios */}
         <StressTestPanel dashboard={dashboard} />
 
         {/* Action Panel - Expected Return + Sizing */}
-        <ActionPanel dashboard={dashboard} />
+        <ActionPanel dashboard={dashboard} backtest={backtest} />
 
         {/* Model Details - Regression stats */}
         <ModelDetails dashboard={dashboard} />
@@ -72,7 +84,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-border/50 py-4 mt-8">
         <div className="container flex items-center justify-between text-xs text-muted-foreground">
-          <span>Macro Risk OS v2.1 — FX + Rates + Sovereign</span>
+          <span>Macro Risk OS v3.9 — FX + Rates + Sovereign</span>
           <div className="flex items-center gap-3">
             {lastUpdated && (
               <span>Atualizado: {lastUpdated.toLocaleString('pt-BR')}</span>

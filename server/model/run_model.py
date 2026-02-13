@@ -1,7 +1,8 @@
-"""Standalone runner: collects fresh data, runs the Macro Risk OS v2.3, and outputs JSON to stdout.
+"""Standalone runner: collects fresh data, runs the Macro Risk OS v3.8, and outputs JSON to stdout.
 This script is designed to be called from Node.js via child_process.
-It outputs a single JSON object with the full Macro Risk OS v2.3 results.
-v2.3: Removed legacy v1 model execution. All output is from the modern engine.
+It outputs a single JSON object with the full Macro Risk OS v3.8 results.
+v3.8: Added SHAP feature importance, Ibovespa benchmark, variable transaction costs,
+      expanding window OOS, GARCH volatility, purged k-fold CV.
 """
 
 import sys
@@ -16,13 +17,17 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 def run_and_output():
     """Run the full Macro Risk OS v2 and output JSON to stdout"""
     
-    # Step 1: Collect fresh data
-    print("[RUNNER] Starting data collection...", file=sys.stderr)
-    try:
-        from data_collector import collect_all
-        collect_all()
-    except Exception as e:
-        print(f"[WARN] Data collection had errors: {e}", file=sys.stderr)
+    # Step 1: Collect fresh data (skip with --skip-collect flag)
+    skip_collect = '--skip-collect' in sys.argv
+    if skip_collect:
+        print("[RUNNER] Skipping data collection (--skip-collect flag)", file=sys.stderr)
+    else:
+        print("[RUNNER] Starting data collection...", file=sys.stderr)
+        try:
+            from data_collector import collect_all
+            collect_all()
+        except Exception as e:
+            print(f"[WARN] Data collection had errors: {e}", file=sys.stderr)
     
     # Step 2: Run Macro Risk OS v2.3
     print("[RUNNER] Running Macro Risk OS v2.3 engine...", file=sys.stderr)
@@ -60,7 +65,9 @@ def run_and_output():
         'fx_fair_value': current.get('fx_fair_value', 0),
         'fx_misalignment': current.get('fx_misalignment', 0),
         'ppp_fair': current.get('ppp_fair', 0),
+        'ppp_bs_fair': current.get('ppp_bs_fair', 0),
         'beer_fair': current.get('beer_fair', 0),
+        'feer_fair': current.get('feer_fair', 0),
         # Rates
         'selic_target': current.get('selic_target', 0),
         'di_1y': current.get('di_1y', 0),
@@ -142,13 +149,19 @@ def run_and_output():
             # v2.3: Two-level regime
             'P_domestic_calm': r.get('P_domestic_calm', 0),
             'P_domestic_stress': r.get('P_domestic_stress', 0),
-            # v2.3: Ensemble & score demeaning
-            'w_ridge_avg': r.get('w_ridge_avg', 0.5),
-            'w_gbm_avg': r.get('w_gbm_avg', 0.5),
+            # v2.3/v3.7: Ensemble & score demeaning (4 models)
+            'w_ridge_avg': r.get('w_ridge_avg', 0.25),
+            'w_gbm_avg': r.get('w_gbm_avg', 0.25),
+            'w_rf_avg': r.get('w_rf_avg', 0.25),
+            'w_xgb_avg': r.get('w_xgb_avg', 0.25),
             'raw_score': r.get('raw_score', 0),
             'demeaned_score': r.get('demeaned_score', 0),
             # v2.3: Rolling Sharpe 12m
             'rolling_sharpe_12m': r.get('rolling_sharpe_12m', None),
+            # v3.8: Ibovespa benchmark
+            'equity_ibov': r.get('equity_ibov', None),
+            'ibov_return': r.get('ibov_return', None),
+            'drawdown_ibov': r.get('drawdown_ibov', None),
         })
     
     # Build regime timeseries (v2.3: includes domestic regime)
@@ -180,7 +193,9 @@ def run_and_output():
         if fv:
             ts_point['spot'] = fv.get('spot')
             ts_point['ppp_fair'] = fv.get('ppp_fair')
+            ts_point['ppp_bs_fair'] = fv.get('ppp_bs_fair')
             ts_point['beer_fair'] = fv.get('beer_fair')
+            ts_point['feer_fair'] = fv.get('feer_fair')
             ts_point['fx_fair'] = fv.get('fx_fair')
     
     # Also add fair_value_ts points that are outside the backtest period (pre-backtest history)
@@ -191,7 +206,9 @@ def run_and_output():
                 'date': fv['date'],
                 'spot': fv.get('spot'),
                 'ppp_fair': fv.get('ppp_fair'),
+                'ppp_bs_fair': fv.get('ppp_bs_fair'),
                 'beer_fair': fv.get('beer_fair'),
+                'feer_fair': fv.get('feer_fair'),
                 'fx_fair': fv.get('fx_fair'),
                 'equity_overlay': None,
                 'equity_total': None,
@@ -223,6 +240,16 @@ def run_and_output():
     stress_tests = v2_result.get('stress_tests', {})
     
     # Final output
+    # v3.8: SHAP feature importance
+    shap_importance = v2_result.get('shap_importance', {})
+    
+    # v3.9: SHAP history (temporal evolution)
+    shap_history = v2_result.get('shap_history', [])
+    
+    # v3.8: Ibovespa benchmark summary
+    ibovespa_summary = bt_summary.get('ibovespa', {})
+    dashboard['ibovespa_metrics'] = ibovespa_summary
+    
     result = {
         'dashboard': dashboard,
         'timeseries': timeseries,
@@ -233,6 +260,8 @@ def run_and_output():
         'backtest_ts': backtest_ts,
         'stress_tests': stress_tests,
         'fair_value_ts': fair_value_ts,
+        'shap_importance': shap_importance,
+        'shap_history': shap_history,
     }
     
     # v2.3: Legacy v1 model (macro_risk_os.py) has been deprecated.
@@ -244,7 +273,14 @@ def run_and_output():
     sys.stdout.write('\n')
     sys.stdout.flush()
     
-    print(f"[RUNNER] Complete. v2.3 overlay={overlay.get('total_return', 0):.1f}%, Sharpe={overlay.get('sharpe', 0):.2f}", file=sys.stderr)
+    print(f"[RUNNER] Complete. v3.9 overlay={overlay.get('total_return', 0):.1f}%, Sharpe={overlay.get('sharpe', 0):.2f}", file=sys.stderr)
+    if ibovespa_summary:
+        print(f"[RUNNER] Ibovespa benchmark: {ibovespa_summary.get('total_return', 0):.1f}%, Sharpe={ibovespa_summary.get('sharpe', 0):.2f}", file=sys.stderr)
+    if shap_importance:
+        print(f"[RUNNER] SHAP importance computed for {len(shap_importance)} instruments", file=sys.stderr)
+    if shap_history:
+        n_dates = len(set(s['date'] for s in shap_history))
+        print(f"[RUNNER] SHAP history: {len(shap_history)} entries across {n_dates} dates", file=sys.stderr)
 
 
 def _sanitize(obj):

@@ -32,6 +32,8 @@ export const modelRuns = mysqlTable("model_runs", {
   stateVariablesJson: json("stateVariablesJson"), // X1-X7 Z-score timeseries
   scoreJson: json("scoreJson"), // Score timeseries (total, structural, cyclical, regime)
   backtestJson: json("backtestJson"), // Backtest equity curve, drawdown, and performance metrics
+  shapJson: json('shap_json'), // v3.8: SHAP feature importance per instrument
+  shapHistoryJson: json('shap_history_json'), // v3.9: SHAP temporal evolution
   // Legacy data for backward compatibility
   cyclicalJson: json("cyclicalJson").notNull(), // Cyclical factor Z-scores
   legacyDashboardJson: json("legacyDashboardJson"), // Legacy FX-only model
