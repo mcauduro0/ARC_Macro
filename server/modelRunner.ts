@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import { insertModelRun, getLatestModelRun } from "./db";
+import { generatePostRunAlerts } from "./alertEngine";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MODEL_SCRIPT = path.join(__dirname, "model", "run_model.py");
@@ -75,6 +76,15 @@ export async function executeModel(): Promise<{ success: boolean; runId?: number
     });
 
     console.log(`[ModelRunner] Macro Risk OS completed successfully. Run ID: ${runId}`);
+
+    // Generate alerts and changelog entry
+    try {
+      const alertResult = await generatePostRunAlerts(runId);
+      console.log(`[ModelRunner] Alert engine: ${alertResult.alerts} alerts, changelog: ${alertResult.changelog}`);
+    } catch (alertErr) {
+      console.error("[ModelRunner] Alert generation failed (non-fatal):", alertErr);
+    }
+
     return { success: true, runId };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);

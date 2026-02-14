@@ -5,6 +5,8 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getLatestModelRun, getModelRunHistory } from "./db";
 import { executeModel, isModelRunning } from "./modelRunner";
 import { portfolioRouter } from "./portfolioRouter";
+import { getModelChangelog, getModelAlerts, getUnreadAlertCount, markModelAlertRead, dismissModelAlert, dismissAllModelAlerts } from "./alertEngine";
+import { z } from "zod";
 
 export const appRouter = router({
   system: systemRouter,
@@ -131,6 +133,52 @@ export const appRouter = router({
   }),
 
   portfolio: portfolioRouter,
+
+  // ============================================================
+  // Model Changelog & Alerts
+  // ============================================================
+
+  changelog: router({
+    /** Get model version history with metrics */
+    list: publicProcedure.query(async () => {
+      return getModelChangelog(50);
+    }),
+  }),
+
+  alerts: router({
+    /** Get active model alerts */
+    list: publicProcedure.query(async () => {
+      return getModelAlerts(100, true);
+    }),
+
+    /** Get unread alert count (for notification badge) */
+    unreadCount: publicProcedure.query(async () => {
+      return getUnreadAlertCount();
+    }),
+
+    /** Mark an alert as read */
+    markRead: protectedProcedure
+      .input(z.object({ alertId: z.number() }))
+      .mutation(async ({ input }) => {
+        await markModelAlertRead(input.alertId);
+        return { success: true };
+      }),
+
+    /** Dismiss an alert */
+    dismiss: protectedProcedure
+      .input(z.object({ alertId: z.number() }))
+      .mutation(async ({ input }) => {
+        await dismissModelAlert(input.alertId);
+        return { success: true };
+      }),
+
+    /** Dismiss all alerts */
+    dismissAll: protectedProcedure
+      .mutation(async () => {
+        await dismissAllModelAlerts();
+        return { success: true };
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

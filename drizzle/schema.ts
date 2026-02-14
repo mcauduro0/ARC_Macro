@@ -255,3 +255,76 @@ export const portfolioPnlDaily = mysqlTable("portfolio_pnl_daily", {
 
 export type PortfolioPnlDaily = typeof portfolioPnlDaily.$inferSelect;
 export type InsertPortfolioPnlDaily = typeof portfolioPnlDaily.$inferInsert;
+
+// ============================================================
+// Model Changelog & Alerts
+// ============================================================
+
+/**
+ * Model changelog — tracks version history with key metrics for comparison.
+ * Each model run generates a changelog entry with performance metrics.
+ */
+export const modelChangelog = mysqlTable("model_changelog", {
+  id: int("id").autoincrement().primaryKey(),
+  modelRunId: int("modelRunId"), // links to model_runs
+  version: varchar("version", { length: 20 }).notNull(), // e.g. "v3.9.1"
+  runDate: varchar("runDate", { length: 10 }).notNull(), // YYYY-MM-DD
+  // Key metrics for comparison
+  score: double("score"), // composite score at run time
+  regime: varchar("regime", { length: 30 }), // dominant regime
+  regimeCarryProb: double("regimeCarryProb"),
+  regimeRiskoffProb: double("regimeRiskoffProb"),
+  regimeStressProb: double("regimeStressProb"),
+  // Backtest metrics
+  backtestSharpe: double("backtestSharpe"),
+  backtestReturn: double("backtestReturn"), // total return %
+  backtestMaxDD: double("backtestMaxDD"),
+  backtestWinRate: double("backtestWinRate"),
+  backtestMonths: int("backtestMonths"),
+  // Position sizing
+  weightFx: double("weightFx"),
+  weightFront: double("weightFront"),
+  weightBelly: double("weightBelly"),
+  weightLong: double("weightLong"),
+  weightHard: double("weightHard"),
+  // Model config
+  trainingWindow: int("trainingWindow"),
+  nStressScenarios: int("nStressScenarios"),
+  // Changes description
+  changesJson: json("changesJson"), // [{type, description}] array of changes
+  metricsJson: json("metricsJson"), // full metrics snapshot for deep comparison
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ModelChangelogEntry = typeof modelChangelog.$inferSelect;
+export type InsertModelChangelog = typeof modelChangelog.$inferInsert;
+
+/**
+ * Model alerts — automatic alerts for regime changes, SHAP shifts, etc.
+ * Separate from portfolio alerts (which are portfolio-specific).
+ */
+export const modelAlerts = mysqlTable("model_alerts", {
+  id: int("id").autoincrement().primaryKey(),
+  modelRunId: int("modelRunId"),
+  alertType: mysqlEnum("alertType", [
+    "regime_change", "shap_shift", "score_change",
+    "drawdown_warning", "model_degradation", "data_quality"
+  ]).notNull(),
+  severity: mysqlEnum("severity", ["info", "warning", "critical"]).notNull().default("info"),
+  title: varchar("title", { length: 200 }).notNull(),
+  message: text("message").notNull(),
+  // Context data
+  previousValue: varchar("previousValue", { length: 100 }),
+  currentValue: varchar("currentValue", { length: 100 }),
+  threshold: double("threshold"),
+  instrument: varchar("instrument", { length: 20 }), // for SHAP alerts
+  feature: varchar("feature", { length: 100 }), // for SHAP alerts
+  detailsJson: json("detailsJson"), // additional context
+  // Status
+  isRead: boolean("isRead").notNull().default(false),
+  isDismissed: boolean("isDismissed").notNull().default(false),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ModelAlert = typeof modelAlerts.$inferSelect;
+export type InsertModelAlert = typeof modelAlerts.$inferInsert;

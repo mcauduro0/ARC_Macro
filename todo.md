@@ -677,3 +677,25 @@
 - [x] Run model and insert into DB (overlay +37.9%, Sharpe 0.70, Ibovespa +275.5%)
 - [x] Verify API returns correct data (5 stress tests, 127 backtest months, 868 SHAP history)
 - [x] Write 7 vitest tests for stability audit (165 total tests passing)
+
+
+## Model Changelog & Alerts (v3.10)
+
+### Model Changelog Panel
+- [x] Add model_changelog DB table (version, score, regime, backtest metrics, weights, changesJson)
+- [x] Create tRPC procedures: changelog.list, changelog with version comparison
+- [x] Build ModelChangelogPanel component with version history table, metric diffs, delta indicators
+- [x] Integrate into Home.tsx (after SHAP History panel)
+
+### Automatic Alerts Engine
+- [x] Create alertEngine.ts with generatePostRunAlerts() called from modelRunner.ts
+- [x] Detect regime changes (carry/riskoff/stress with severity mapping)
+- [x] Detect stress probability surge (>15pp without regime change)
+- [x] Detect SHAP feature importance shifts (>20% relative threshold, >15pp shift, rank-1 changes)
+- [x] Detect score changes (>1.0 absolute delta)
+- [x] Detect drawdown warnings (>-10% as warning, >-15% as critical)
+- [x] Store alerts in model_alerts table with severity, type, instrument, feature
+- [x] Build ModelAlertsPanel component with severity badges, filter tabs, dismiss/dismiss-all
+- [x] Integrate alerts at top of Home.tsx (prominent position)
+- [x] Create tRPC procedures: alerts.list, alerts.dismiss, alerts.dismissAll, alerts.unreadCount
+- [x] Write 26 vitest tests for alert engine logic and changelog (191 total tests passing)

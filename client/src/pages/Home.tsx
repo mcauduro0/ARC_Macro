@@ -1,7 +1,7 @@
 /**
  * BRLUSD Institutional FX Model Dashboard
  * Design: "Institutional Command Center" - Dark slate theme
- * Hierarchy: Status Bar → Overview Grid → Detail Charts → Stress Tests → SHAP → Action Panel
+ * Hierarchy: Status Bar → Alerts → Overview Grid → Detail Charts → Stress Tests → SHAP → Changelog → Action Panel
  */
 
 import { useModelData } from '@/hooks/useModelData';
@@ -14,6 +14,8 @@ import { ShapPanel } from '@/components/ShapPanel';
 import { ShapHistoryPanel } from '@/components/ShapHistoryPanel';
 import { ActionPanel } from '@/components/ActionPanel';
 import { ModelDetails } from '@/components/ModelDetails';
+import { ModelChangelogPanel } from '@/components/ModelChangelogPanel';
+import { ModelAlertsPanel } from '@/components/ModelAlertsPanel';
 import { Loader2 } from 'lucide-react';
 
 export default function Home() {
@@ -50,6 +52,9 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="container py-6 space-y-6">
+        {/* Alerts - Regime changes, SHAP shifts, score changes */}
+        <ModelAlertsPanel />
+
         {/* Overview Grid - 4 asset classes + state variables + regime */}
         <OverviewGrid dashboard={dashboard} />
 
@@ -77,6 +82,9 @@ export default function Home() {
         {/* Action Panel - Expected Return + Sizing */}
         <ActionPanel dashboard={dashboard} backtest={backtest} />
 
+        {/* Model Changelog - Version history with metrics comparison */}
+        <ModelChangelogPanel />
+
         {/* Model Details - Regression stats */}
         <ModelDetails dashboard={dashboard} />
       </main>
@@ -84,7 +92,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-border/50 py-4 mt-8">
         <div className="container flex items-center justify-between text-xs text-muted-foreground">
-          <span>Macro Risk OS v3.9 — FX + Rates + Sovereign</span>
+          <span>Macro Risk OS v3.9.1 — FX + Rates + Sovereign</span>
           <div className="flex items-center gap-3">
             {lastUpdated && (
               <span>Atualizado: {lastUpdated.toLocaleString('pt-BR')}</span>
