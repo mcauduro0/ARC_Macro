@@ -645,3 +645,35 @@
 - [x] Write vitest tests for shap_history data flow (7 tests, all passing)
 - [x] 158 total tests passing (7 files)
 - [x] Save checkpoint and deliver
+
+
+## Stability Audit (v3.9.1) — System Reliability & Transparency
+
+### Issue 1: Window Alignment
+- [ ] Align backtest equity chart to same 10Y window as timeseries (2016-2026)
+- [ ] Ensure both charts use consistent date ranges
+
+### Issue 2: Missing Stress Scenarios
+- [ ] Investigate why stress scenarios dropped from ~5 to only 2
+- [ ] Restore missing stress events (COVID, Taper Tantrum, etc.)
+- [ ] Verify stress test data pipeline integrity
+
+### Issue 3: Score & Sizing Changes
+- [ ] Audit what caused score/sizing changes between versions
+- [ ] Document root cause (TC variable, expanding window, or bug)
+- [ ] Provide clear changelog explaining all model parameter changes
+
+### Issue 4: Transparency
+- [ ] Add model changelog/audit trail to frontend
+- [ ] Show version comparison metrics
+- [ ] Deliver detailed audit report to user
+
+### Fix: Revert progressive alignment, use training_window=36
+- [x] Revert _build_return_df to require all core instruments (no NaN fill with 0)
+- [x] Change training_window from 60 to 36 months in DEFAULT_CONFIG
+- [x] Fix rolldown NaN propagation in front/belly/long instrument returns (fillna(0))
+- [x] Verify backtest starts 2015-08 with 127 months OOS (all instruments real data)
+- [x] Verify 5/6 stress scenarios covered: Dilma, Joesley, COVID, Fed Hiking, Fiscal Lula
+- [x] Run model and insert into DB (overlay +37.9%, Sharpe 0.70, Ibovespa +275.5%)
+- [x] Verify API returns correct data (5 stress tests, 127 backtest months, 868 SHAP history)
+- [x] Write 7 vitest tests for stability audit (165 total tests passing)

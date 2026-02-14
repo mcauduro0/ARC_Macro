@@ -1,0 +1,8 @@
+{
+  "query": "UPDATE model_runs SET dashboard_json = JSON_SET(dashboard_json, '$.risk_metrics.max_drawdown', CAST(JSON_EXTRACT(dashboard_json, '$.risk_metrics.max_drawdown_historical') AS DECIMAL(10,4)) / 100) WHERE JSON_EXTRACT(dashboard_json, '$.risk_metrics.max_drawdown_historical') IS NOT NULL;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute UPDATE model_runs SET dashboard_json = JSON_SET(dashboard_json, '$.risk_metrics.max_drawdown', CAST(JSON_EXTRACT(dashboard_json, '$.risk_metrics.max_drawdown_historical') AS DECIMAL(10,4)) / 100) WHERE JSON_EXTRACT(dashboard_json, '$.risk_metrics.max_drawdown_historical') IS NOT NULL;",
+  "returncode": 1,
+  "logs": [
+    "ERROR 1054 (42S22) at line 1: Unknown column 'dashboard_json' in 'where clause'"
+  ]
+}

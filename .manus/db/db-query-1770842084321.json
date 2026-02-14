@@ -1,0 +1,15 @@
+{
+  "query": "SELECT id, LENGTH(backtestJson) as bt_len, SUBSTRING(backtestJson, 1, 100) as bt_preview FROM model_runs WHERE status = 'completed' ORDER BY createdAt DESC LIMIT 1;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute SELECT id, LENGTH(backtestJson) as bt_len, SUBSTRING(backtestJson, 1, 100) as bt_preview FROM model_runs WHERE status = 'completed' ORDER BY createdAt DESC LIMIT 1;",
+  "rows": [
+    {
+      "id": "60002",
+      "bt_len": "47101",
+      "bt_preview": "{\"summary\": {\"annualized_return\": 2.28, \"annualized_vol\": 5.84, \"best_month\": {\"date\": \"2020-03-01\","
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tbt_len\tbt_preview\n60002\t47101\t{\"summary\": {\"annualized_return\": 2.28, \"annualized_vol\": 5.84, \"best_month\": {\"date\": \"2020-03-01\",\n",
+  "stderr": "",
+  "execution_time_ms": 50
+}

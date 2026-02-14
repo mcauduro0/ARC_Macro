@@ -1,0 +1,16 @@
+{
+  "query": "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'model_runs' AND COLUMN_NAME LIKE '%shap%';",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'model_runs' AND COLUMN_NAME LIKE '%shap%';",
+  "rows": [
+    {
+      "COLUMN_NAME": "shap_json"
+    },
+    {
+      "COLUMN_NAME": "shap_history_json"
+    }
+  ],
+  "messages": [],
+  "stdout": "COLUMN_NAME\nshap_json\nshap_history_json\n",
+  "stderr": "",
+  "execution_time_ms": 63
+}

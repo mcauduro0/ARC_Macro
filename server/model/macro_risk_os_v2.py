@@ -41,9 +41,9 @@ DEFAULT_CONFIG = {
     "base_currency": "BRL",
     "rebalance": "monthly",
     "prediction_horizon": "1m",
-    "training_window_months": 60,
+    "training_window_months": 36,  # v3.9.1: reduced from 60 to 36 to extend backtest coverage while keeping all instruments real
     "expanding_window": True,  # v3.8: True = expanding window (use all available data), False = fixed rolling window
-    "min_training_months": 60,  # v3.8: minimum training period before predictions start
+    "min_training_months": 36,  # v3.9.1: reduced from 60 to 36 (3 years minimum training)
     "refit_frequency": "monthly",
     "standardization_window_months": 60,
     "std_floor": 0.5,
@@ -491,7 +491,7 @@ class DataLayer:
             rolldown_1y = pd.Series(0.0, index=di_1y.index)
             if len(di_3m) > 12:
                 slope = (di_1y - di_3m.reindex(di_1y.index)) / 100
-                rolldown_1y = slope.shift(1) * (9/12) / 12  # 9 months of rolldown over 1 month
+                rolldown_1y = (slope.shift(1) * (9/12) / 12).fillna(0)  # v3.9.1: fillna(0) where di_3m unavailable
 
             # Receiver return: -Δy * duration + carry + rolldown
             # But we need to subtract CDI since this is an overlay
@@ -517,7 +517,7 @@ class DataLayer:
             rolldown_5y = pd.Series(0.0, index=di_5y.index)
             if len(di_2y) > 12:
                 slope = (di_5y - di_2y.reindex(di_5y.index)) / 100
-                rolldown_5y = slope.shift(1) * (3/5) / 12
+                rolldown_5y = (slope.shift(1) * (3/5) / 12).fillna(0)  # v3.9.1: fillna(0) where di_2y unavailable
 
             excess_carry_5y = pd.Series(0.0, index=di_5y.index)
             if len(selic) > 0:
@@ -535,7 +535,7 @@ class DataLayer:
             rolldown_10y = pd.Series(0.0, index=di_10y.index)
             if len(di_5y) > 12:
                 slope = (di_10y - di_5y.reindex(di_10y.index)) / 100
-                rolldown_10y = slope.shift(1) * (5/10) / 12
+                rolldown_10y = (slope.shift(1) * (5/10) / 12).fillna(0)  # v3.9.1: fillna(0) where di_5y unavailable
 
             excess_carry_10y = pd.Series(0.0, index=di_10y.index)
             if len(selic) > 0:
@@ -575,32 +575,33 @@ class DataLayer:
 
     def _build_return_df(self):
         """Build aligned monthly return DataFrame for all instruments.
-        v2.3.1: Use core instruments (fx, front, belly, long) for alignment.
-        Hard currency (EMBI-based) is optional - fill with 0 if missing.
-        This prevents stale EMBI/CDS data from truncating the entire backtest.
+        v3.9.1: All core instruments must have real data — no zero-filling.
+        Uses training_window=36 (instead of 60) to maximize backtest coverage
+        while maintaining data integrity across all asset classes.
+        
+        Hard currency (EMBI-based) is optional — fill with 0 if data ends early,
+        since it's a separate asset class that doesn't distort the DI-based instruments.
         """
         instruments = ['fx', 'front', 'belly', 'long', 'hard']
-        core_instruments = ['fx', 'front', 'belly', 'long']  # Must have these
+        core_instruments = ['fx', 'front', 'belly', 'long']  # Must have real data
         frames = {}
         for inst in instruments:
             if inst in self.instrument_returns:
                 frames[inst] = self.instrument_returns[inst]
 
         if frames:
-            # First build with all instruments
             full_df = pd.DataFrame(frames)
             
-            # Align on core instruments only (drop rows where core has NaN)
+            # Require all core instruments to have real data (no zero-filling)
             core_cols = [c for c in core_instruments if c in full_df.columns]
             if core_cols:
-                # Drop rows where ANY core instrument is NaN
                 aligned = full_df.dropna(subset=core_cols)
-                # For non-core instruments (hard), fill NaN with 0 (no position)
+                # Only fill NaN for non-core instruments (hard) with 0
                 for col in aligned.columns:
                     if col not in core_cols:
                         nan_count = aligned[col].isna().sum()
                         if nan_count > 0:
-                            log(f"    {col}: {nan_count} NaN months filled with 0 (instrument data ends early)")
+                            log(f"    {col}: {nan_count} NaN months filled with 0 (non-core instrument)")
                             aligned[col] = aligned[col].fillna(0)
                 self.ret_df = aligned
             else:

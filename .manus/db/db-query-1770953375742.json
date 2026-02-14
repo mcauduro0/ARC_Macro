@@ -1,0 +1,64 @@
+{
+  "query": "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'model_runs' ORDER BY ORDINAL_POSITION;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'model_runs' ORDER BY ORDINAL_POSITION;",
+  "rows": [
+    {
+      "COLUMN_NAME": "id"
+    },
+    {
+      "COLUMN_NAME": "runDate"
+    },
+    {
+      "COLUMN_NAME": "currentSpot"
+    },
+    {
+      "COLUMN_NAME": "dashboardJson"
+    },
+    {
+      "COLUMN_NAME": "timeseriesJson"
+    },
+    {
+      "COLUMN_NAME": "regimeJson"
+    },
+    {
+      "COLUMN_NAME": "cyclicalJson"
+    },
+    {
+      "COLUMN_NAME": "status"
+    },
+    {
+      "COLUMN_NAME": "errorMessage"
+    },
+    {
+      "COLUMN_NAME": "isLatest"
+    },
+    {
+      "COLUMN_NAME": "createdAt"
+    },
+    {
+      "COLUMN_NAME": "stateVariablesJson"
+    },
+    {
+      "COLUMN_NAME": "legacyDashboardJson"
+    },
+    {
+      "COLUMN_NAME": "legacyTimeseriesJson"
+    },
+    {
+      "COLUMN_NAME": "legacyRegimeJson"
+    },
+    {
+      "COLUMN_NAME": "legacyCyclicalJson"
+    },
+    {
+      "COLUMN_NAME": "scoreJson"
+    },
+    {
+      "COLUMN_NAME": "backtestJson"
+    }
+  ],
+  "messages": [],
+  "stdout": "COLUMN_NAME\nid\nrunDate\ncurrentSpot\ndashboardJson\ntimeseriesJson\nregimeJson\ncyclicalJson\nstatus\nerrorMessage\nisLatest\ncreatedAt\nstateVariablesJson\nlegacyDashboardJson\nlegacyTimeseriesJson\nlegacyRegimeJson\nlegacyCyclicalJson\nscoreJson\nbacktestJson\n",
+  "stderr": "",
+  "execution_time_ms": 61
+}

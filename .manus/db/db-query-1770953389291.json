@@ -1,0 +1,50 @@
+{
+  "query": "SELECT id, runDate, currentSpot, status, isLatest, createdAt FROM model_runs ORDER BY id DESC LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute SELECT id, runDate, currentSpot, status, isLatest, createdAt FROM model_runs ORDER BY id DESC LIMIT 5;",
+  "rows": [
+    {
+      "id": "240002",
+      "runDate": "2019-12-31",
+      "currentSpot": "5.212",
+      "status": "completed",
+      "isLatest": "1",
+      "createdAt": "2026-02-13 02:49:34"
+    },
+    {
+      "id": "240001",
+      "runDate": "2024-07-31",
+      "currentSpot": "5.212",
+      "status": "completed",
+      "isLatest": "0",
+      "createdAt": "2026-02-13 02:32:40"
+    },
+    {
+      "id": "210002",
+      "runDate": "2024-07-31",
+      "currentSpot": "5.2056",
+      "status": "completed",
+      "isLatest": "0",
+      "createdAt": "2026-02-13 00:09:45"
+    },
+    {
+      "id": "210001",
+      "runDate": "2024-07-31",
+      "currentSpot": "5.2056",
+      "status": "completed",
+      "isLatest": "0",
+      "createdAt": "2026-02-12 23:57:04"
+    },
+    {
+      "id": "180001",
+      "runDate": "2024-07-31",
+      "currentSpot": "5.1962",
+      "status": "completed",
+      "isLatest": "0",
+      "createdAt": "2026-02-12 17:29:05"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\trunDate\tcurrentSpot\tstatus\tisLatest\tcreatedAt\n240002\t2019-12-31\t5.212\tcompleted\t1\t2026-02-13 02:49:34\n240001\t2024-07-31\t5.212\tcompleted\t0\t2026-02-13 02:32:40\n210002\t2024-07-31\t5.2056\tcompleted\t0\t2026-02-13 00:09:45\n210001\t2024-07-31\t5.2056\tcompleted\t0\t2026-02-12 23:57:04\n180001\t2024-07-31\t5.1962\tcompleted\t0\t2026-02-12 17:29:05\n",
+  "stderr": "",
+  "execution_time_ms": 52
+}

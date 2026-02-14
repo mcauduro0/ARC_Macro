@@ -1,0 +1,8 @@
+{
+  "query": "SELECT id, run_date, current_spot, status, created_at, JSON_EXTRACT(dashboard_json, '$.front_fair') as front_fair, JSON_EXTRACT(dashboard_json, '$.belly_fair') as belly_fair, JSON_EXTRACT(dashboard_json, '$.long_fair') as long_fair, JSON_EXTRACT(dashboard_json, '$.taylor_gap') as taylor_gap FROM model_runs ORDER BY created_at DESC LIMIT 3",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute SELECT id, run_date, current_spot, status, created_at, JSON_EXTRACT(dashboard_json, '$.front_fair') as front_fair, JSON_EXTRACT(dashboard_json, '$.belly_fair') as belly_fair, JSON_EXTRACT(dashboard_json, '$.long_fair') as long_fair, JSON_EXTRACT(dashboard_json, '$.taylor_gap') as taylor_gap FROM model_runs ORDER BY created_at DESC LIMIT 3",
+  "returncode": 1,
+  "logs": [
+    "ERROR 1054 (42S22) at line 1: Unknown column 'run_date' in 'field list'"
+  ]
+}

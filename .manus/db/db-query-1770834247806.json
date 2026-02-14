@@ -1,0 +1,18 @@
+{
+  "query": "SELECT id, IFNULL(JSON_LENGTH(legacyTimeseriesJson), 0) as legacy_ts_len, IFNULL(JSON_LENGTH(legacyCyclicalJson), 0) as legacy_cyc_len, JSON_LENGTH(timeseriesJson) as ts_len, IFNULL(JSON_LENGTH(cyclicalJson), 0) as cyc_len, IFNULL(JSON_LENGTH(stateVariablesJson), 0) as sv_len FROM model_runs ORDER BY id DESC LIMIT 1;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute SELECT id, IFNULL(JSON_LENGTH(legacyTimeseriesJson), 0) as legacy_ts_len, IFNULL(JSON_LENGTH(legacyCyclicalJson), 0) as legacy_cyc_len, JSON_LENGTH(timeseriesJson) as ts_len, IFNULL(JSON_LENGTH(cyclicalJson), 0) as cyc_len, IFNULL(JSON_LENGTH(stateVariablesJson), 0) as sv_len FROM model_runs ORDER BY id DESC LIMIT 1;",
+  "rows": [
+    {
+      "id": "60002",
+      "legacy_ts_len": "0",
+      "legacy_cyc_len": "0",
+      "ts_len": "194",
+      "cyc_len": "0",
+      "sv_len": "279"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tlegacy_ts_len\tlegacy_cyc_len\tts_len\tcyc_len\tsv_len\n60002\t0\t0\t194\t0\t279\n",
+  "stderr": "",
+  "execution_time_ms": 57
+}

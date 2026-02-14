@@ -1,0 +1,37 @@
+{
+  "query": "SELECT id, status, CAST(JSON_EXTRACT(dashboardJson, '$.positions.fx.direction') AS CHAR) as fx_dir, CAST(JSON_EXTRACT(dashboardJson, '$.positions.front.direction') AS CHAR) as front_dir, CAST(JSON_EXTRACT(dashboardJson, '$.positions.long.direction') AS CHAR) as long_dir, CAST(JSON_EXTRACT(dashboardJson, '$.positions.hard.direction') AS CHAR) as hard_dir, CAST(JSON_EXTRACT(dashboardJson, '$.positions.fx.weight') AS CHAR) as fx_w FROM model_runs ORDER BY id DESC LIMIT 3;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute SELECT id, status, CAST(JSON_EXTRACT(dashboardJson, '$.positions.fx.direction') AS CHAR) as fx_dir, CAST(JSON_EXTRACT(dashboardJson, '$.positions.front.direction') AS CHAR) as front_dir, CAST(JSON_EXTRACT(dashboardJson, '$.positions.long.direction') AS CHAR) as long_dir, CAST(JSON_EXTRACT(dashboardJson, '$.positions.hard.direction') AS CHAR) as hard_dir, CAST(JSON_EXTRACT(dashboardJson, '$.positions.fx.weight') AS CHAR) as fx_w FROM model_runs ORDER BY id DESC LIMIT 3;",
+  "rows": [
+    {
+      "id": "60002",
+      "status": "completed",
+      "fx_dir": "NULL",
+      "front_dir": "NULL",
+      "long_dir": "NULL",
+      "hard_dir": "NULL",
+      "fx_w": "0.0081"
+    },
+    {
+      "id": "60001",
+      "status": "completed",
+      "fx_dir": "NULL",
+      "front_dir": "NULL",
+      "long_dir": "NULL",
+      "hard_dir": "NULL",
+      "fx_w": "0.0081"
+    },
+    {
+      "id": "30001",
+      "status": "completed",
+      "fx_dir": "NULL",
+      "front_dir": "NULL",
+      "long_dir": "NULL",
+      "hard_dir": "NULL",
+      "fx_w": "0.0226"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tstatus\tfx_dir\tfront_dir\tlong_dir\thard_dir\tfx_w\n60002\tcompleted\tNULL\tNULL\tNULL\tNULL\t0.0081\n60001\tcompleted\tNULL\tNULL\tNULL\tNULL\t0.0081\n30001\tcompleted\tNULL\tNULL\tNULL\tNULL\t0.0226\n",
+  "stderr": "",
+  "execution_time_ms": 52
+}
