@@ -1,0 +1,137 @@
+name: BRLUSD Daily Model Run
+
+on:
+  # Daily schedule: 6:00 AM UTC (3:00 AM BRT) — markets closed, fresh data
+  schedule:
+    - cron: '0 6 * * 1-5'  # Monday-Friday at 6:00 UTC
+  
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      skip_collect:
+        description: 'Skip data collection (use cached data)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  run-model:
+    name: Run ARC Macro Risk OS
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: server/model/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r server/model/requirements.txt
+
+      - name: Run ARC Macro Risk OS model
+        id: run_model
+        working-directory: server/model
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          echo "::group::Model Execution"
+          START_TIME=$(date +%s)
+          
+          # Run the model, capture JSON stdout, log stderr
+          ARGS=""
+          if [ "${{ github.event.inputs.skip_collect }}" = "true" ]; then
+            ARGS="--skip-collect"
+          fi
+          
+          python3.11 run_model.py $ARGS \
+            > ${{ runner.temp }}/model_output.json \
+            2> >(tee ${{ runner.temp }}/model_stderr.log >&2)
+          
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "::endgroup::"
+          
+          # Validate output
+          OUTPUT_SIZE=$(stat -f%z "${{ runner.temp }}/model_output.json" 2>/dev/null || stat -c%s "${{ runner.temp }}/model_output.json")
+          echo "Model output size: ${OUTPUT_SIZE} bytes"
+          echo "Model duration: ${DURATION} seconds ($(( DURATION / 60 )) minutes)"
+          
+          if [ "$OUTPUT_SIZE" -lt 1000 ]; then
+            echo "::error::Model output too small (${OUTPUT_SIZE} bytes). Likely failed."
+            cat ${{ runner.temp }}/model_output.json
+            exit 1
+          fi
+          
+          # Validate JSON
+          python3.11 -c "import json; d=json.load(open('${{ runner.temp }}/model_output.json')); print(f'Dashboard keys: {len(d.get(\"dashboard\",{}))}'); print(f'Timeseries points: {len(d.get(\"timeseries\",[]))}')"
+          
+          echo "duration=${DURATION}" >> $GITHUB_OUTPUT
+          echo "output_size=${OUTPUT_SIZE}" >> $GITHUB_OUTPUT
+
+      - name: Upload model output to Manus S3
+        id: upload_s3
+        env:
+          MANUS_WEBHOOK_SECRET: ${{ secrets.MANUS_WEBHOOK_SECRET }}
+          MANUS_DASHBOARD_URL: ${{ secrets.MANUS_DASHBOARD_URL }}
+        run: |
+          # Compress the output for faster upload
+          gzip -c ${{ runner.temp }}/model_output.json > ${{ runner.temp }}/model_output.json.gz
+          
+          # Upload to the dashboard via webhook endpoint
+          echo "Uploading model output to Manus dashboard..."
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "${MANUS_DASHBOARD_URL}/api/webhook/model-result" \
+            -H "Authorization: Bearer ${MANUS_WEBHOOK_SECRET}" \
+            -H "Content-Type: application/json" \
+            -H "Content-Encoding: gzip" \
+            --data-binary @${{ runner.temp }}/model_output.json.gz \
+            --max-time 120)
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          
+          echo "HTTP Status: ${HTTP_CODE}"
+          echo "Response: ${BODY}"
+          
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Successfully uploaded to Manus dashboard"
+            echo "upload_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::Failed to upload to Manus dashboard (HTTP ${HTTP_CODE}). Saving as artifact."
+            echo "upload_success=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Save model output as artifact (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-output-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/model_output.json
+            ${{ runner.temp }}/model_stderr.log
+          retention-days: 30
+
+      - name: Post run summary
+        if: always()
+        run: |
+          echo "## 🏦 ARC Macro Risk OS — Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Duration** | ${{ steps.run_model.outputs.duration }}s ($(( ${{ steps.run_model.outputs.duration || 0 }} / 60 ))m) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Output Size** | ${{ steps.run_model.outputs.output_size }} bytes |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Dashboard Upload** | ${{ steps.upload_s3.outputs.upload_success || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Run** | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
