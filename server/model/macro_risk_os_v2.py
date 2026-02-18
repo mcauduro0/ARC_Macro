@@ -4095,7 +4095,7 @@ def run_v2(config=None):
                 'cupom_cambial_30d': round(cupom_30, 2) if cupom_30 else 0,
                 'cip_basis': round(cip_basis, 2) if cip_basis else 0,
                 # IPCA Expectations 12M
-                'ipca_exp_12m': round(float(ipca_exp.iloc[-1]), 2) if hasattr(ipca_exp, 'iloc') and len(ipca_exp) > 0 else 0,
+                'ipca_exp_12m': round(float(dl.monthly.get('ipca_exp_12m', dl.monthly.get('ipca_exp', pd.Series(dtype=float))).iloc[-1]), 2) if len(dl.monthly.get('ipca_exp_12m', dl.monthly.get('ipca_exp', pd.Series(dtype=float)))) > 0 else 0,
             }
 
     # ============================================================
