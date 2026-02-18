@@ -297,7 +297,7 @@ function runPythonModel(pythonBin: string): Promise<string> {
     const proc = spawn(pythonBin, [MODEL_SCRIPT], {
       cwd: path.dirname(MODEL_SCRIPT),
       env: cleanEnv,
-      timeout: 1_800_000, // 30 minute timeout
+      timeout: 5_400_000, // 90 minute timeout for walk-forward backtest
     });
 
     let stdout = "";
