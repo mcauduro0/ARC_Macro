@@ -944,10 +944,15 @@ class FeatureEngine:
                 fx_fair_vals.append(np.nan)
 
         fx_fair = pd.Series(fx_fair_vals, index=union_idx).dropna()
+        if len(fx_fair) == 0:
+            log("    WARNING: fx_fair is empty after dropna — using spot as fallback")
+            fx_fair = spot_m.copy()
+            fx_fair.name = 'fx_fair'
         self.features['fx_fair'] = fx_fair
 
         # Valuation signal: val_fx = log(FX_fair / spot)
         val_fx = np.log(fx_fair / spot_m.reindex(fx_fair.index))
+        val_fx = val_fx.replace([np.inf, -np.inf], np.nan).dropna()
         self.features['val_fx'] = val_fx
 
         # Half-life mean reversion signal
@@ -957,12 +962,15 @@ class FeatureEngine:
         self.features['mu_fx_val'] = mu_fx_val
 
         # Store latest fair values
-        self._fx_fair = float(fx_fair.iloc[-1])
+        self._fx_fair = float(fx_fair.iloc[-1]) if len(fx_fair) > 0 else float(spot_m.iloc[-1])
         self.features['fx_fair_ts'] = fx_fair
 
         log(f"    fx_fair: {len(fx_fair)} months, current={fx_fair.iloc[-1]:.4f}")
-        log(f"    val_fx: mean={val_fx.mean():.4f}, current={val_fx.iloc[-1]:.4f}")
-        log(f"    mu_fx_val: mean={mu_fx_val.mean()*100:.2f}%, current={mu_fx_val.iloc[-1]*100:.2f}%")
+        if len(val_fx) > 0:
+            log(f"    val_fx: mean={val_fx.mean():.4f}, current={val_fx.iloc[-1]:.4f}")
+            log(f"    mu_fx_val: mean={mu_fx_val.mean()*100:.2f}%, current={mu_fx_val.iloc[-1]*100:.2f}%")
+        else:
+            log("    val_fx: empty (no valuation signal available)")
 
     def _build_carry(self):
         """Build carry features for each instrument."""
