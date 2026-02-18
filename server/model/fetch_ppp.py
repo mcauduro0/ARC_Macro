@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-FRED_API_KEY = "e63bf4ad4b21136be0b68c27e7e510d9"
+FRED_API_KEY = os.environ.get('FRED_API_KEY', 'e63bf4ad4b21136be0b68c27e7e510d9')
 
 def fetch_world_bank_ppp():
     """Fetch PA.NUS.PPP (PPP conversion factor, LCU per international $) for Brazil"""

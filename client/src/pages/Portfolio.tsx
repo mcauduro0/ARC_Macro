@@ -29,6 +29,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
+import { RebalancingTab } from "@/components/RebalancingTab";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -52,14 +53,14 @@ const fmtNum = (v: number) => v.toLocaleString("pt-BR");
 
 function instrumentLabel(inst: string) {
   const map: Record<string, string> = {
-    fx: "FX (Câmbio)", front: "Front-End (DI 1Y)", belly: "Belly (DI 5Y)",
-    long: "Long-End (DI 10Y)", hard: "Hard Currency",
+    fx: "FX (DOL Futuro)", front: "Front-End (DI 1Y)", belly: "Belly (DI 5Y)",
+    long: "Long-End (DI 10Y)", hard: "Cupom Cambial (DDI)", ntnb: "NTN-B (IPCA+)",
   };
   return map[inst] || inst;
 }
 
 function instrumentShort(inst: string) {
-  const map: Record<string, string> = { fx: "FX", front: "Front", belly: "Belly", long: "Long", hard: "Hard" };
+  const map: Record<string, string> = { fx: "FX", front: "Front", belly: "Belly", long: "Long", hard: "DDI", ntnb: "NTN-B" };
   return map[inst] || inst;
 }
 
@@ -122,6 +123,7 @@ function SetupTab() {
   const [enableBelly, setEnableBelly] = useState(true);
   const [enableLong, setEnableLong] = useState(true);
   const [enableHard, setEnableHard] = useState(true);
+  const [enableNtnb, setEnableNtnb] = useState(true);
   const [initialized, setInitialized] = useState(false);
 
   // Populate from existing config
@@ -136,6 +138,7 @@ function SetupTab() {
     setEnableBelly(existingConfig.enableBelly ?? true);
     setEnableLong(existingConfig.enableLong ?? true);
     setEnableHard(existingConfig.enableHard ?? true);
+    setEnableNtnb((existingConfig as any).enableNtnb ?? true);
     setInitialized(true);
   }
 
@@ -148,7 +151,7 @@ function SetupTab() {
       aumBrl: aumValue,
       volTargetAnnual: volValue,
       fxInstrument,
-      enableFx, enableFront, enableBelly, enableLong, enableHard,
+      enableFx, enableFront, enableBelly, enableLong, enableHard, enableNtnb,
       maxDrawdownPct: parseFloat(maxDrawdown),
       maxLeverageGross: parseFloat(maxLeverage),
     });
@@ -232,11 +235,12 @@ function SetupTab() {
             <Label className="text-sm font-semibold">Instrumentos Habilitados</Label>
             <div className="grid grid-cols-2 gap-3">
               {[
-                { label: "FX (Câmbio)", value: enableFx, set: setEnableFx, desc: "DOL/WDO" },
-                { label: "Front-End", value: enableFront, set: setEnableFront, desc: "DI1F (1Y)" },
-                { label: "Belly", value: enableBelly, set: setEnableBelly, desc: "DI1F (5Y)" },
-                { label: "Long-End", value: enableLong, set: setEnableLong, desc: "DI1F (10Y)" },
-                { label: "Hard Currency", value: enableHard, set: setEnableHard, desc: "DDI/NTN-B" },
+                { label: "FX (DOL Futuro)", value: enableFx, set: setEnableFx, desc: "DOL/WDO B3" },
+                { label: "Front-End (DI 1Y)", value: enableFront, set: setEnableFront, desc: "DI1F 1 ano" },
+                { label: "Belly (DI 5Y)", value: enableBelly, set: setEnableBelly, desc: "DI1F 5 anos" },
+                { label: "Long-End (DI 10Y)", value: enableLong, set: setEnableLong, desc: "DI1F 10 anos" },
+                { label: "Cupom Cambial (DDI)", value: enableHard, set: setEnableHard, desc: "DDI Futuro" },
+                { label: "NTN-B (IPCA+)", value: enableNtnb, set: setEnableNtnb, desc: "Tesouro IPCA+" },
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between p-3 rounded-lg bg-secondary/30 border border-border">
                   <div>
@@ -318,7 +322,7 @@ function PositionsTab() {
       <Card className="bg-card border-border">
         <CardHeader>
           <CardTitle className="text-base">Posições Alvo do Modelo</CardTitle>
-          <CardDescription>Alocação calculada pelo Macro Risk OS para o portfólio configurado.</CardDescription>
+          <CardDescription>Alocação calculada pelo ARC Macro para o portfólio configurado.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -580,11 +584,12 @@ function TradesTab() {
                 <Select value={manualInstrument} onValueChange={setManualInstrument}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="fx">FX (Câmbio)</SelectItem>
+                    <SelectItem value="fx">FX (DOL Futuro)</SelectItem>
                     <SelectItem value="front">Front-End (DI 1Y)</SelectItem>
                     <SelectItem value="belly">Belly (DI 5Y)</SelectItem>
                     <SelectItem value="long">Long-End (DI 10Y)</SelectItem>
-                    <SelectItem value="hard">Hard Currency</SelectItem>
+                    <SelectItem value="hard">Cupom Cambial (DDI)</SelectItem>
+                    <SelectItem value="ntnb">NTN-B (IPCA+)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -962,6 +967,7 @@ function PnlTab() {
   const [bellyPnl, setBellyPnl] = useState("");
   const [longPnl, setLongPnl] = useState("");
   const [hardPnl, setHardPnl] = useState("");
+  const [ntnbPnl, setNtnbPnl] = useState("");
 
   const handleRecordPnl = () => {
     const input: any = { pnlDate };
@@ -977,6 +983,7 @@ function PnlTab() {
       if (bellyPnl) input.bellyPnlBrl = parseFloat(bellyPnl);
       if (longPnl) input.longPnlBrl = parseFloat(longPnl);
       if (hardPnl) input.hardPnlBrl = parseFloat(hardPnl);
+      if (ntnbPnl) (input as any).ntnbPnlBrl = parseFloat(ntnbPnl);
     }
     recordPnl.mutate(input);
   };
@@ -1150,8 +1157,12 @@ function PnlTab() {
                   <Input type="number" placeholder="0" value={longPnl} onChange={(e) => setLongPnl(e.target.value)} className="font-data" />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Hard P&L (R$)</Label>
+                  <Label className="text-xs">DDI P&L (R$)</Label>
                   <Input type="number" placeholder="0" value={hardPnl} onChange={(e) => setHardPnl(e.target.value)} className="font-data" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">NTN-B P&L (R$)</Label>
+                  <Input type="number" placeholder="0" value={ntnbPnl} onChange={(e) => setNtnbPnl(e.target.value)} className="font-data" />
                 </div>
               </div>
             )}
@@ -1188,7 +1199,8 @@ function PnlTab() {
                     <TableHead className="text-right">Front</TableHead>
                     <TableHead className="text-right">Belly</TableHead>
                     <TableHead className="text-right">Long</TableHead>
-                    <TableHead className="text-right">Hard</TableHead>
+                    <TableHead className="text-right">DDI</TableHead>
+                    <TableHead className="text-right">NTN-B</TableHead>
                     <TableHead className="text-right">Acum.</TableHead>
                     <TableHead className="text-right">DD</TableHead>
                   </TableRow>
@@ -1205,6 +1217,7 @@ function PnlTab() {
                       <TableCell className={`text-right font-data text-xs ${pnlColor(row.bellyPnlBrl)}`}>{fmtBrlFull(row.bellyPnlBrl)}</TableCell>
                       <TableCell className={`text-right font-data text-xs ${pnlColor(row.longPnlBrl)}`}>{fmtBrlFull(row.longPnlBrl)}</TableCell>
                       <TableCell className={`text-right font-data text-xs ${pnlColor(row.hardPnlBrl)}`}>{fmtBrlFull(row.hardPnlBrl)}</TableCell>
+                      <TableCell className={`text-right font-data text-xs ${pnlColor(row.ntnbPnlBrl || 0)}`}>{fmtBrlFull(row.ntnbPnlBrl || 0)}</TableCell>
                       <TableCell className={`text-right font-data ${pnlColor(row.cumulativePnlBrl)}`}>{fmtBrlFull(row.cumulativePnlBrl)}</TableCell>
                       <TableCell className="text-right font-data text-xs text-rose-400">{row.drawdownPct?.toFixed(2)}%</TableCell>
                     </TableRow>
@@ -1331,16 +1344,30 @@ function RiskTab() {
                 <div className="flex justify-between"><span className="text-muted-foreground">Direção</span>{directionBadge(exp.dv01TotalBrl > 0 ? 'LONG' : exp.dv01TotalBrl < 0 ? 'SHORT' : 'FLAT')}</div>
               </div>
             </div>
-            {/* Credit Factor */}
+            {/* Credit Factor - Cupom Cambial */}
             <div className="space-y-3 p-4 rounded-lg bg-amber-500/5 border border-amber-500/20">
               <div className="flex items-center gap-2">
                 <Shield className="w-5 h-5 text-amber-400" />
-                <h4 className="font-semibold text-sm">Crédito (Hard Currency)</h4>
+                <h4 className="font-semibold text-sm">Cupom Cambial (DDI)</h4>
               </div>
               <div className="space-y-1 text-sm">
                 <div className="flex justify-between"><span className="text-muted-foreground">Spread DV01</span><span className="font-data">{fmtBrl(exp.dv01Ladder?.find((d: any) => d.instrument === 'hard')?.dv01Brl || 0)}/bp</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">VaR Contrib.</span><span className="font-data">{varData.componentVar?.find((c: any) => c.instrument === 'hard')?.varContributionPct?.toFixed(1) || '0.0'}%</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Direção</span>{directionBadge(exp.dv01Ladder?.find((d: any) => d.instrument === 'hard')?.direction || 'FLAT')}</div>
+              </div>
+            </div>
+          </div>
+          {/* NTN-B (Inflação) Factor */}
+          <div className="grid grid-cols-1 md:grid-cols-1 gap-6 mt-4">
+            <div className="space-y-3 p-4 rounded-lg bg-purple-500/5 border border-purple-500/20">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-purple-400" />
+                <h4 className="font-semibold text-sm">Inflação (NTN-B / IPCA+)</h4>
+              </div>
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between"><span className="text-muted-foreground">Duration DV01</span><span className="font-data">{fmtBrl(exp.dv01Ladder?.find((d: any) => d.instrument === 'ntnb')?.dv01Brl || 0)}/bp</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">VaR Contrib.</span><span className="font-data">{varData.componentVar?.find((c: any) => c.instrument === 'ntnb')?.varContributionPct?.toFixed(1) || '0.0'}%</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Direção</span>{directionBadge(exp.dv01Ladder?.find((d: any) => d.instrument === 'ntnb')?.direction || 'FLAT')}</div>
               </div>
             </div>
           </div>
@@ -1623,7 +1650,10 @@ export default function Portfolio() {
     return <div className="min-h-screen flex items-center justify-center bg-background"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
-  if (!user) {
+  // In standalone mode (no OAuth), user is always provided by the server
+  // Only show login gate if OAuth is configured but user is not authenticated
+  const oauthConfigured = Boolean(import.meta.env.VITE_OAUTH_PORTAL_URL);
+  if (!user && oauthConfigured) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Card className="bg-card border-border max-w-md w-full mx-4">
@@ -1670,7 +1700,7 @@ export default function Portfolio() {
       {/* Main Content */}
       <main className="container py-6">
         <Tabs defaultValue="positions" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-6 lg:w-auto lg:inline-grid">
+          <TabsList className="grid w-full grid-cols-7 lg:w-auto lg:inline-grid">
             <TabsTrigger value="setup" className="gap-1.5">
               <Settings className="w-4 h-4" />
               <span className="hidden sm:inline">Setup</span>
@@ -1691,6 +1721,10 @@ export default function Portfolio() {
               <Shield className="w-4 h-4" />
               <span className="hidden sm:inline">Risco</span>
             </TabsTrigger>
+            <TabsTrigger value="rebalance" className="gap-1.5">
+              <Scale className="w-4 h-4" />
+              <span className="hidden sm:inline">Rebalancear</span>
+            </TabsTrigger>
             <TabsTrigger value="history" className="gap-1.5">
               <History className="w-4 h-4" />
               <span className="hidden sm:inline">Histórico</span>
@@ -1702,6 +1736,7 @@ export default function Portfolio() {
           <TabsContent value="trades"><TradesTab /></TabsContent>
           <TabsContent value="pnl"><PnlTab /></TabsContent>
           <TabsContent value="risk"><RiskTab /></TabsContent>
+          <TabsContent value="rebalance"><RebalancingTab /></TabsContent>
           <TabsContent value="history"><HistoryTab /></TabsContent>
         </Tabs>
       </main>

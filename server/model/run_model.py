@@ -44,7 +44,7 @@ def run_and_output():
     
     # Build dashboard object (current state) — enriched from v2.3 engine
     dashboard = {
-        'version': 'v2.3',
+        'version': 'v4.3',
         'framework': 'overlay_on_cdi',
         'run_date': current.get('date', ''),
         'current_spot': current.get('current_spot', 0),
@@ -71,6 +71,7 @@ def run_and_output():
         # Rates
         'selic_target': current.get('selic_target', 0),
         'di_1y': current.get('di_1y', 0),
+        'di_2y': current.get('di_2y', 0),
         'di_5y': current.get('di_5y', 0),
         'di_10y': current.get('di_10y', 0),
         'front_fair': current.get('front_fair', 0),
@@ -78,12 +79,24 @@ def run_and_output():
         'long_fair': current.get('long_fair', 0),
         'taylor_gap': current.get('taylor_gap', 0),
         'term_premium': current.get('term_premium', 0),
+        # Composite Equilibrium Rate
+        'equilibrium': current.get('equilibrium', {}),
+        'selic_star': current.get('equilibrium', {}).get('selic_star', current.get('equilibrium', {}).get('composite_rstar', None)),
         # Credit / Global
         'embi_spread': current.get('embi_spread', 0),
         'ust_2y': current.get('ust_2y', 0),
         'ust_10y': current.get('ust_10y', 0),
         'vix': current.get('vix', 0),
         'dxy': current.get('dxy', 0),
+        # Cupom Cambial (DDI)
+        'cupom_cambial_360d': current.get('cupom_cambial_360d', 0),
+        'cupom_cambial_chg_1m': current.get('cupom_cambial_chg_1m', 0),
+        'cupom_cambial_chg_3m': current.get('cupom_cambial_chg_3m', 0),
+        # NTN-B
+        'ntnb_5y_yield': current.get('ntnb_5y_yield', 0),
+        'ntnb_10y_yield': current.get('ntnb_10y_yield', 0),
+        # IPCA Expectations
+        'ipca_expectations': current.get('ipca_exp_12m', 0),
         # Risk
         'risk_metrics': {
             'portfolio_vol': current.get('portfolio_vol', 0),
@@ -127,18 +140,21 @@ def run_and_output():
             'weight_belly': r.get('weight_belly', 0),
             'weight_long': r.get('weight_long', 0),
             'weight_hard': r.get('weight_hard', 0),
+            'weight_ntnb': r.get('weight_ntnb', 0),
             # Mu predictions
             'mu_fx': r.get('mu_fx', 0),
             'mu_front': r.get('mu_front', 0),
             'mu_belly': r.get('mu_belly', 0),
             'mu_long': r.get('mu_long', 0),
             'mu_hard': r.get('mu_hard', 0),
+            'mu_ntnb': r.get('mu_ntnb', 0),
             # PnL attribution
             'fx_pnl': r.get('fx_pnl', 0),
             'front_pnl': r.get('front_pnl', 0),
             'belly_pnl': r.get('belly_pnl', 0),
             'long_pnl': r.get('long_pnl', 0),
             'hard_pnl': r.get('hard_pnl', 0),
+            'ntnb_pnl': r.get('ntnb_pnl', 0),
             # Regime
             'P_carry': r.get('P_carry', 0),
             'P_riskoff': r.get('P_riskoff', 0),
@@ -228,6 +244,7 @@ def run_and_output():
                 'mu_belly': r.get('mu_belly', 0),
                 'mu_long': r.get('mu_long', 0),
                 'mu_hard': r.get('mu_hard', 0),
+                'mu_ntnb': r.get('mu_ntnb', 0),
             })
     
     # Build backtest_ts (for BacktestPanel)
@@ -250,6 +267,17 @@ def run_and_output():
     ibovespa_summary = bt_summary.get('ibovespa', {})
     dashboard['ibovespa_metrics'] = ibovespa_summary
     
+    # v4.3: Feature selection results with stability + temporal tracking
+    feature_selection = v2_result.get('feature_selection', {})
+    feature_selection_temporal = v2_result.get('feature_selection_temporal', {})
+    if feature_selection:
+        dashboard['feature_selection'] = feature_selection
+    if feature_selection_temporal:
+        dashboard['feature_selection_temporal'] = feature_selection_temporal
+    
+    # v5.7: r* timeseries from composite equilibrium
+    rstar_ts = v2_result.get('rstar_ts', [])
+    
     result = {
         'dashboard': dashboard,
         'timeseries': timeseries,
@@ -262,6 +290,9 @@ def run_and_output():
         'fair_value_ts': fair_value_ts,
         'shap_importance': shap_importance,
         'shap_history': shap_history,
+        'feature_selection': feature_selection,
+        'feature_selection_temporal': feature_selection_temporal,
+        'rstar_ts': rstar_ts,
     }
     
     # v2.3: Legacy v1 model (macro_risk_os.py) has been deprecated.

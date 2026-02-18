@@ -49,8 +49,8 @@ export function ModelDetails({ dashboard: d }: Props) {
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
                   {Object.entries(d.model_details).map(([asset, detail]) => {
                     const labels: Record<string, string> = {
-                      fx: 'FX (USDBRL)', front: 'Front-End (DI 1Y)',
-                      long: 'Long-End (DI 5Y)', hard: 'Hard Currency',
+                      fx: 'DOL Futuro (Câmbio)', front: 'Front-End (DI 1Y)',
+                      long: 'Long-End (DI 5Y)', hard: 'Cupom Cambial (DDI)',
                     };
                     const md = detail as { r_squared: number; coefficients: Record<string, number>; p_values: Record<string, number>; n_obs: number };
                     return (
@@ -119,7 +119,7 @@ export function ModelDetails({ dashboard: d }: Props) {
               {/* Methodology Note */}
               <div className="mt-4 p-3 bg-secondary/20 rounded-lg border border-border/30">
                 <p className="text-[10px] text-muted-foreground leading-relaxed">
-                  <strong className="text-foreground/70">Macro Risk OS:</strong> Sistema cross-asset integrado para BRL. 7 variáveis de estado unificadas (X1-X7) alimentam modelos de expected return para 4 classes: FX (USDBRL), Front-End (DI 1Y), Long-End (DI 5Y), Hard Currency (EMBI). Regime Markov 3-estados (Carry, RiskOff, StressDom) ajusta expected returns. Sizing ótimo via Half-Kelly + target vol 8% ann. Agregação de risco com matriz de covariância e stress tests históricos.
+                  <strong className="text-foreground/70">ARC Macro:</strong> Sistema cross-asset integrado para BRL. 7 variáveis de estado unificadas (X1-X7) alimentam modelos de expected return para 4 classes: DOL Futuro (Câmbio), Front-End (DI 1Y), Long-End (DI 5Y), Cupom Cambial (DDI) (EMBI). Regime Markov 3-estados (Carry, RiskOff, StressDom) ajusta expected returns. Sizing ótimo via Half-Kelly + target vol 8% ann. Agregação de risco com matriz de covariância e stress tests históricos.
                 </p>
               </div>
             </CardContent>

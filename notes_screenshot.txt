@@ -1,0 +1,6 @@
+Screenshot shows:
+- Pipeline Panel visible with "Executar Pipeline" button
+- Data Source Health Panel visible with "Verificar" button
+- Shows "Nenhum health check registrado" - correct empty state
+- Status bar shows "RUNNING" - pipeline is currently executing
+- No TypeScript errors, no build errors

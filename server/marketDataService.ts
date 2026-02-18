@@ -111,10 +111,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 // ANBIMA FEED API — OAuth2 + DI Curve + NTN-B
 // ============================================================
 
-const ANBIMA_CLIENT_ID = "qoSZCWnsbfSK";
-const ANBIMA_CLIENT_SECRET = "xgAbycH1LIb0";
+const ANBIMA_CLIENT_ID = process.env.ANBIMA_CLIENT_ID || "qoSZCWnsbfSK";
+const ANBIMA_CLIENT_SECRET = process.env.ANBIMA_CLIENT_SECRET || "xgAbycH1LIb0";
 const ANBIMA_AUTH_URL = "https://api.anbima.com.br/oauth/access-token";
-const ANBIMA_BASE_URL = "https://api-sandbox.anbima.com.br";
+const ANBIMA_BASE_URL = process.env.ANBIMA_BASE_URL || "https://api.anbima.com.br";
 
 let anbimaTokenCache: { token: string | null; expiresAt: number } = {
   token: null,

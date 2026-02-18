@@ -69,6 +69,7 @@ export const portfolioConfig = mysqlTable("portfolio_config", {
   enableBelly: boolean("enableBelly").notNull().default(true),
   enableLong: boolean("enableLong").notNull().default(true),
   enableHard: boolean("enableHard").notNull().default(true),
+  enableNtnb: boolean("enableNtnb").notNull().default(true),
   // B3 instrument preferences
   fxInstrument: mysqlEnum("fxInstrument", ["DOL", "WDO"]).notNull().default("WDO"),
   // Risk limits
@@ -92,7 +93,7 @@ export const portfolioPositions = mysqlTable("portfolio_positions", {
   configId: int("configId").notNull(),
   snapshotId: int("snapshotId"), // links to the snapshot that generated this position
   // Instrument identification
-  instrument: mysqlEnum("instrument", ["fx", "front", "belly", "long", "hard"]).notNull(),
+  instrument: mysqlEnum("instrument", ["fx", "front", "belly", "long", "hard", "ntnb"]).notNull(),
   b3Ticker: varchar("b3Ticker", { length: 20 }).notNull(), // e.g. WDOH26, DI1F27, etc.
   b3InstrumentType: varchar("b3InstrumentType", { length: 20 }).notNull(), // DOL, WDO, DI1, FRA, DDI, NTNB
   // Position details
@@ -166,7 +167,7 @@ export const portfolioTrades = mysqlTable("portfolio_trades", {
   configId: int("configId").notNull(),
   snapshotId: int("snapshotId"), // links to the rebalancing snapshot
   // Trade identification
-  instrument: mysqlEnum("instrument", ["fx", "front", "belly", "long", "hard"]).notNull(),
+  instrument: mysqlEnum("instrument", ["fx", "front", "belly", "long", "hard", "ntnb"]).notNull(),
   b3Ticker: varchar("b3Ticker", { length: 20 }).notNull(),
   b3InstrumentType: varchar("b3InstrumentType", { length: 20 }).notNull(),
   // Trade details
@@ -240,6 +241,7 @@ export const portfolioPnlDaily = mysqlTable("portfolio_pnl_daily", {
   bellyPnlBrl: double("bellyPnlBrl").default(0),
   longPnlBrl: double("longPnlBrl").default(0),
   hardPnlBrl: double("hardPnlBrl").default(0),
+  ntnbPnlBrl: double("ntnbPnlBrl").default(0),
   // Cumulative
   cumulativePnlBrl: double("cumulativePnlBrl").notNull().default(0),
   cumulativePnlPct: double("cumulativePnlPct").notNull().default(0),
@@ -287,6 +289,7 @@ export const modelChangelog = mysqlTable("model_changelog", {
   weightBelly: double("weightBelly"),
   weightLong: double("weightLong"),
   weightHard: double("weightHard"),
+  weightNtnb: double("weightNtnb"),
   // Model config
   trainingWindow: int("trainingWindow"),
   nStressScenarios: int("nStressScenarios"),
@@ -308,7 +311,8 @@ export const modelAlerts = mysqlTable("model_alerts", {
   modelRunId: int("modelRunId"),
   alertType: mysqlEnum("alertType", [
     "regime_change", "shap_shift", "score_change",
-    "drawdown_warning", "model_degradation", "data_quality"
+    "drawdown_warning", "model_degradation", "data_quality", "feature_stability",
+    "rebalancing_deviation"
   ]).notNull(),
   severity: mysqlEnum("severity", ["info", "warning", "critical"]).notNull().default("info"),
   title: varchar("title", { length: 200 }).notNull(),
@@ -328,3 +332,65 @@ export const modelAlerts = mysqlTable("model_alerts", {
 
 export type ModelAlert = typeof modelAlerts.$inferSelect;
 export type InsertModelAlert = typeof modelAlerts.$inferInsert;
+
+// ============================================================
+// Pipeline Execution Tracking
+// ============================================================
+
+/**
+ * Pipeline runs — tracks daily automated update pipeline execution.
+ * Each pipeline run has multiple steps (ingest, model, backtest, alerts, etc.)
+ */
+export const pipelineRuns = mysqlTable("pipeline_runs", {
+  id: int("id").autoincrement().primaryKey(),
+  triggerType: mysqlEnum("triggerType", ["manual", "scheduled", "startup"]).notNull(),
+  triggeredBy: varchar("triggeredBy", { length: 100 }), // user name or 'system'
+  status: mysqlEnum("status", ["running", "completed", "failed", "partial"]).default("running").notNull(),
+  // Step tracking
+  currentStep: varchar("currentStep", { length: 50 }),
+  totalSteps: int("totalSteps").notNull().default(6),
+  completedSteps: int("completedSteps").notNull().default(0),
+  // Step details as JSON array
+  stepsJson: json("stepsJson"), // [{name, status, startedAt, completedAt, duration, message, error}]
+  // Results summary
+  modelRunId: int("modelRunId"), // links to model_runs if model step succeeded
+  alertsGenerated: int("alertsGenerated").default(0),
+  summaryJson: json("summaryJson"), // {spot, score, regime, sharpe, ...}
+  errorMessage: text("errorMessage"),
+  // Timing
+  startedAt: timestamp("startedAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+  durationMs: int("durationMs"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type PipelineRun = typeof pipelineRuns.$inferSelect;
+export type InsertPipelineRun = typeof pipelineRuns.$inferInsert;
+
+/**
+ * Data source health tracking.
+ * Records the status, latency, and error history of each external data source.
+ */
+export const dataSourceHealth = mysqlTable("data_source_health", {
+  id: int("id").autoincrement().primaryKey(),
+  sourceName: varchar("sourceName", { length: 50 }).notNull(), // e.g., 'BCB', 'FRED', 'ANBIMA', 'Yahoo'
+  sourceLabel: varchar("sourceLabel", { length: 100 }).notNull(), // Human-readable label
+  status: mysqlEnum("status", ["healthy", "degraded", "down", "unknown"]).default("unknown").notNull(),
+  latencyMs: int("latencyMs"), // Last check latency in ms
+  lastSuccessAt: timestamp("lastSuccessAt"), // Last successful data fetch
+  lastFailureAt: timestamp("lastFailureAt"), // Last failed data fetch
+  lastError: text("lastError"), // Last error message
+  seriesCount: int("seriesCount").default(0), // Number of series from this source
+  lastDataDate: varchar("lastDataDate", { length: 10 }), // Latest data point date (YYYY-MM-DD)
+  // Uptime tracking
+  checksTotal: int("checksTotal").default(0),
+  checksSuccess: int("checksSuccess").default(0),
+  uptimePercent: double("uptimePercent").default(100),
+  // History (last 30 checks)
+  historyJson: json("historyJson"), // [{timestamp, status, latencyMs, error?}]
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type DataSourceHealth = typeof dataSourceHealth.$inferSelect;
+export type InsertDataSourceHealth = typeof dataSourceHealth.$inferInsert;

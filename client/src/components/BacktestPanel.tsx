@@ -27,6 +27,7 @@ const COLORS = {
   belly: '#f59e0b',
   long: '#818cf8',
   hard: '#34d399',
+  ntnb: '#fbbf24',
   ibov: '#f59e0b',
   grid: 'rgba(255,255,255,0.05)',
   text: 'rgba(255,255,255,0.5)',
@@ -38,7 +39,8 @@ const INSTRUMENT_LABELS: Record<string, string> = {
   front: 'Front-End (DI 1Y)',
   belly: 'Belly (DI 5Y)',
   long: 'Long-End (DI 10Y)',
-  hard: 'Hard Currency (EMBI)',
+  hard: 'Cupom Cambial (DDI) (EMBI)',
+  ntnb: 'NTN-B (IPCA+)',
 };
 
 const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -185,6 +187,7 @@ export function BacktestPanel({ backtest }: Props) {
       belly_pnl: (pt.belly_pnl ?? 0) * 100,
       long_pnl: (pt.long_pnl ?? 0) * 100,
       hard_pnl: (pt.hard_pnl ?? 0) * 100,
+      ntnb_pnl: (pt.ntnb_pnl ?? 0) * 100,
     }));
   }, [backtest]);
 
@@ -197,6 +200,7 @@ export function BacktestPanel({ backtest }: Props) {
       belly: pt.weight_belly ?? 0,
       long: pt.weight_long ?? 0,
       hard: pt.weight_hard ?? 0,
+      ntnb: pt.weight_ntnb ?? 0,
     }));
   }, [backtest]);
 
@@ -303,9 +307,19 @@ export function BacktestPanel({ backtest }: Props) {
                 {m.period} · {m.nMonths} meses
               </span>
             </div>
-            <div className="flex items-center gap-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-0.5">
-              <AlertTriangle className="w-3 h-3 text-amber-500" />
-              <span className="text-[9px] text-amber-500 font-medium uppercase tracking-wider">Walk-Forward</span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 bg-cyan-500/10 border border-cyan-500/20 rounded px-2 py-0.5">
+                <Calendar className="w-3 h-3 text-cyan-500" />
+                <span className="text-[9px] text-cyan-500 font-medium font-data">Training: 36m rolling</span>
+              </div>
+              <div className="flex items-center gap-1 bg-purple-500/10 border border-purple-500/20 rounded px-2 py-0.5">
+                <Layers className="w-3 h-3 text-purple-500" />
+                <span className="text-[9px] text-purple-500 font-medium font-data">6 instrumentos</span>
+              </div>
+              <div className="flex items-center gap-1 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-0.5">
+                <AlertTriangle className="w-3 h-3 text-amber-500" />
+                <span className="text-[9px] text-amber-500 font-medium uppercase tracking-wider">Walk-Forward</span>
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -629,6 +643,7 @@ export function BacktestPanel({ backtest }: Props) {
                     <Bar dataKey="belly_pnl" stackId="a" fill={COLORS.belly} fillOpacity={0.7} name="Belly (%)" isAnimationActive={false} />
                     <Bar dataKey="long_pnl" stackId="a" fill={COLORS.long} fillOpacity={0.7} name="Long (%)" isAnimationActive={false} />
                     <Bar dataKey="hard_pnl" stackId="a" fill={COLORS.hard} fillOpacity={0.7} name="Hard (%)" isAnimationActive={false} />
+                    <Bar dataKey="ntnb_pnl" stackId="a" fill={COLORS.ntnb} fillOpacity={0.7} name="NTN-B (%)" isAnimationActive={false} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -651,6 +666,7 @@ export function BacktestPanel({ backtest }: Props) {
                   <Line type="stepAfter" dataKey="belly" stroke={COLORS.belly} strokeWidth={1.5} dot={false} name="Belly" isAnimationActive={false} />
                   <Line type="stepAfter" dataKey="long" stroke={COLORS.long} strokeWidth={1.5} dot={false} name="Long" isAnimationActive={false} />
                   <Line type="stepAfter" dataKey="hard" stroke={COLORS.hard} strokeWidth={1.5} dot={false} name="Hard" isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="ntnb" stroke={COLORS.ntnb} strokeWidth={1.5} dot={false} name="NTN-B" isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -670,7 +686,7 @@ export function BacktestPanel({ backtest }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {['fx', 'front', 'belly', 'long', 'hard'].map(inst => {
+                  {['fx', 'front', 'belly', 'long', 'hard', 'ntnb'].map(inst => {
                     const ic = summary.ic_per_instrument?.[inst] ?? 0;
                     const hr = summary.hit_rates?.[inst] ?? 0;
                     const attr = summary.attribution_pct?.[inst] ?? 0;

@@ -69,9 +69,9 @@ export function ActionPanel({ dashboard: d, backtest }: Props) {
           <CardContent className="space-y-3">
             {isMROS ? (
               <>
-                {(['fx', 'front', 'long', 'hard'] as const).map(asset => {
-                  const pos = d.positions?.[asset];
-                  const labels: Record<string, string> = { fx: 'FX (USDBRL)', front: 'Front-End (DI 1Y)', long: 'Long-End (DI 5Y)', hard: 'Hard Currency' };
+                {(['fx', 'front', 'belly', 'long', 'hard', 'ntnb'] as const).map(asset => {
+                  const pos = d.positions?.[asset as keyof typeof d.positions];
+                  const labels: Record<string, string> = { fx: 'DOL Futuro', front: 'Front-End (DI 1Y)', belly: 'Belly (DI 2-5Y)', long: 'Long-End (DI 10Y)', hard: 'Cupom Cambial (DDI)', ntnb: 'NTN-B (IPCA+)' };
                   return (
                     <div key={asset} className="flex items-center justify-between">
                       <span className="text-xs text-muted-foreground">{labels[asset]}</span>

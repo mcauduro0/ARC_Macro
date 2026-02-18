@@ -7,7 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import { startModelScheduler } from "../modelRunner";
+import { startPipelineScheduler } from "../pipelineOrchestrator";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -60,9 +60,9 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
-    // Start model scheduler after server is ready
-    startModelScheduler().catch(err => {
-      console.error('[ModelRunner] Failed to start scheduler:', err);
+    // Start pipeline scheduler (includes model execution + data ingest + alerts)
+    startPipelineScheduler().catch(err => {
+      console.error('[Pipeline] Failed to start scheduler:', err);
     });
   });
 }

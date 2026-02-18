@@ -81,6 +81,42 @@
   --sidebar-ring: oklch(0.75 0.15 195);
 }
 
+/* Light theme override */
+:root:not(.dark) {
+  --background: oklch(0.97 0.005 250);
+  --foreground: oklch(0.15 0.015 250);
+  --card: oklch(1.0 0 0);
+  --card-foreground: oklch(0.15 0.015 250);
+  --popover: oklch(1.0 0 0);
+  --popover-foreground: oklch(0.15 0.015 250);
+  --primary: oklch(0.55 0.18 195);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.92 0.005 250);
+  --secondary-foreground: oklch(0.25 0.015 250);
+  --muted: oklch(0.92 0.005 250);
+  --muted-foreground: oklch(0.45 0.01 250);
+  --accent: oklch(0.92 0.005 250);
+  --accent-foreground: oklch(0.15 0.015 250);
+  --destructive: oklch(0.55 0.22 15);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.88 0.005 250);
+  --input: oklch(0.88 0.005 250);
+  --ring: oklch(0.55 0.18 195);
+  --chart-1: oklch(0.55 0.18 195);
+  --chart-2: oklch(0.55 0.2 160);
+  --chart-3: oklch(0.55 0.22 15);
+  --chart-4: oklch(0.65 0.18 85);
+  --chart-5: oklch(0.50 0.18 280);
+  --sidebar: oklch(0.95 0.005 250);
+  --sidebar-foreground: oklch(0.15 0.015 250);
+  --sidebar-primary: oklch(0.55 0.18 195);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.92 0.005 250);
+  --sidebar-accent-foreground: oklch(0.15 0.015 250);
+  --sidebar-border: oklch(0.88 0.005 250);
+  --sidebar-ring: oklch(0.55 0.18 195);
+}
+
 /* Custom colors for the model */
 :root {
   --bullish: oklch(0.72 0.17 160);
@@ -90,6 +126,14 @@
   --surface-elevated: oklch(0.20 0.015 250);
 }
 
+:root:not(.dark) {
+  --bullish: oklch(0.55 0.2 160);
+  --bearish: oklch(0.55 0.22 15);
+  --neutral-signal: oklch(0.65 0.18 85);
+  --cyan-accent: oklch(0.55 0.18 195);
+  --surface-elevated: oklch(0.95 0.005 250);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -97,6 +141,12 @@
   body {
     @apply bg-background text-foreground;
     font-family: 'Geist', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
@@ -178,5 +228,91 @@
 
   .card-indicator-cyan {
     border-top-color: oklch(0.75 0.15 195);
+  }
+
+  /* ── Mobile Optimizations ─────────────────────────────────────── */
+
+  /* Safe area insets for notched devices (iPhone X+, etc.) */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* Touch-optimized scrolling */
+  .mobile-scroll {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    scroll-snap-type: y proximity;
+  }
+
+  /* Prevent text selection on interactive elements */
+  .no-select {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* GPU-accelerated transforms for smooth animations */
+  .gpu-accelerated {
+    transform: translateZ(0);
+    will-change: transform;
+    backface-visibility: hidden;
+  }
+
+  /* Tap highlight removal for cleaner touch feedback */
+  @media (max-width: 768px) {
+    button, a, [role="button"] {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Ensure minimum tap target size (44x44px) */
+    .tap-target {
+      min-width: 44px;
+      min-height: 44px;
+    }
+
+    /* Smooth horizontal scroll for tables */
+    .overflow-x-auto {
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+
+    .overflow-x-auto::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Reduce motion for users who prefer it */
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* Compact cards on mobile */
+    .container {
+      padding-left: 0.75rem;
+      padding-right: 0.75rem;
+    }
+  }
+
+  /* Pull-to-refresh indicator */
+  .pull-indicator {
+    transition: transform 0.2s ease-out;
+  }
+
+  /* Frosted glass effect for headers/footers */
+  .frosted-glass {
+    background: oklch(0.13 0.015 250 / 0.85);
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+  }
+
+  :root:not(.dark) .frosted-glass {
+    background: oklch(0.97 0.005 250 / 0.85);
   }
 }

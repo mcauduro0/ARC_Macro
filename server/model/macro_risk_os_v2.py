@@ -16,12 +16,14 @@ Architecture:
 """
 
 import sys, os, json, math, warnings
+from datetime import datetime
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 import xgboost as xgb
+from feature_selection import DualFeatureSelector, FeatureSelectionResult, InteractionBuilder, INTERACTION_PAIRS
 from arch import arch_model
 from scipy import stats
 import shap
@@ -59,14 +61,15 @@ DEFAULT_CONFIG = {
         "front_weight_max": 1.5,
         "belly_weight_max": 1.5,
         "long_weight_max": 0.75,
-        "hard_weight_max": 1.0
+        "hard_weight_max": 1.0,
+        "ntnb_weight_max": 0.5  # v5.1: NTN-B inflation-linked bonds — moderate limit (50%)
     },
     "factor_limits": {
         "dxy_limit": 1.5, "vix_limit": 1.5,
         "cds_limit": 1.0, "ust10_limit": 1.0
     },
     "transaction_costs_bps": {
-        "fx": 5, "front": 2, "belly": 3, "long": 4, "hard": 5
+        "fx": 5, "front": 2, "belly": 3, "long": 4, "hard": 5, "ntnb": 4  # v5.1: NTN-B transaction cost
     },
     # v3.8: Regime-dependent transaction cost multipliers
     # In stress regimes, bid-ask spreads widen → higher costs
@@ -97,7 +100,8 @@ DEFAULT_CONFIG = {
             "front_weight_max": 1.5,
             "belly_weight_max": 1.5,
             "long_weight_max": 0.75,
-            "hard_weight_max": 1.0
+            "hard_weight_max": 1.0,
+            "ntnb_weight_max": 0.5
         },
         # Risk-off: reduce duration exposure, maintain FX flexibility
         "riskoff": {
@@ -105,7 +109,8 @@ DEFAULT_CONFIG = {
             "front_weight_max": 1.0,
             "belly_weight_max": 0.75,
             "long_weight_max": 0.40,
-            "hard_weight_max": 0.6
+            "hard_weight_max": 0.6,
+            "ntnb_weight_max": 0.3
         },
         # Stress: aggressive cuts across all instruments
         "stress": {
@@ -113,7 +118,8 @@ DEFAULT_CONFIG = {
             "front_weight_max": 0.5,
             "belly_weight_max": 0.4,
             "long_weight_max": 0.25,
-            "hard_weight_max": 0.3
+            "hard_weight_max": 0.3,
+            "ntnb_weight_max": 0.15
         }
     },
 }
@@ -199,6 +205,15 @@ class DataLayer:
         # NTN-B / Breakeven
         self.data['ntnb_5y'] = load_series('NTNB_5Y')
         self.data['ntnb_10y'] = load_series('NTNB_10Y')
+        # Tesouro Direto NTN-B (primary source with full history)
+        tesouro_ntnb_5y = load_series('TESOURO_NTNB_5Y')
+        tesouro_ntnb_10y = load_series('TESOURO_NTNB_10Y')
+        if len(tesouro_ntnb_5y) > 12:
+            self.data['tesouro_ntnb_5y'] = tesouro_ntnb_5y
+            log(f"    TESOURO_NTNB_5Y: {len(tesouro_ntnb_5y)} pts (Tesouro Direto)")
+        if len(tesouro_ntnb_10y) > 12:
+            self.data['tesouro_ntnb_10y'] = tesouro_ntnb_10y
+            log(f"    TESOURO_NTNB_10Y: {len(tesouro_ntnb_10y)} pts (Tesouro Direto)")
         self.data['breakeven_5y'] = load_series('BREAKEVEN_5Y')
         self.data['breakeven_10y'] = load_series('BREAKEVEN_10Y')
         # ANBIMA overrides
@@ -569,6 +584,18 @@ class DataLayer:
             self.instrument_returns['hard'] = winsorize(ret_hard.dropna())
             log(f"    hard (sovereign spread): {len(self.instrument_returns['hard'])} months")
 
+
+        # --- NTN-B (Cupom de Inflação) — Real yield returns ---
+        ntnb_5y = self.monthly.get('tesouro_ntnb_5y', self.monthly.get('ntnb_5y', pd.Series(dtype=float)))
+        if len(ntnb_5y) > 12:
+            d_real_yield = ntnb_5y.diff()  # change in real yield (%)
+            ntnb_dur = 4.5  # approximate modified duration for 5Y NTN-B
+            # Carry: real yield / 12 (monthly carry from holding NTN-B)
+            ntnb_carry = ntnb_5y.shift(1) / 100 / 12  # percent to decimal, monthly
+            # Return: benefit from real yield decline + carry
+            ret_ntnb = (-d_real_yield / 100 * ntnb_dur) + ntnb_carry
+            self.instrument_returns['ntnb'] = winsorize(ret_ntnb.dropna())
+            log(f"    ntnb (NTN-B real yield): {len(self.instrument_returns['ntnb'])} months")
         # Build aligned return DataFrame
         self._build_return_df()
         return self
@@ -582,7 +609,7 @@ class DataLayer:
         Hard currency (EMBI-based) is optional — fill with 0 if data ends early,
         since it's a separate asset class that doesn't distort the DI-based instruments.
         """
-        instruments = ['fx', 'front', 'belly', 'long', 'hard']
+        instruments = ['fx', 'front', 'belly', 'long', 'hard', 'ntnb']
         core_instruments = ['fx', 'front', 'belly', 'long']  # Must have real data
         frames = {}
         for inst in instruments:
@@ -646,7 +673,7 @@ class FeatureEngine:
         self._build_term_premium()
         self._build_breakeven_decomposition()
         self._build_fiscal_premium()
-        self._build_taylor_rule()
+        self._build_composite_equilibrium()
         self._build_feature_df()
         return self
 
@@ -969,11 +996,31 @@ class FeatureEngine:
                 log(f"    carry_{bucket}: {len(excess)} months, mean={excess.mean()*100:.3f}%/m")
 
         # Hard carry: spread level / 12
-        embi = m.get('embi_spread', pd.Series(dtype=float))
-        if len(embi) > 12:
-            carry_hard = embi / 10000 / 12
+        # Carry DDI (cupom cambial) — use swap DI x Dólar rate
+        cupom_360 = m.get('swap_dixdol_360d', pd.Series(dtype=float))
+        cupom_30 = m.get('fx_cupom_1m', pd.Series(dtype=float))
+        cupom_for_carry = cupom_360 if len(cupom_360) > 12 else cupom_30
+        if len(cupom_for_carry) > 12:
+            carry_hard = cupom_for_carry / 100 / 12  # percent to decimal, monthly
             self.features['carry_hard'] = carry_hard
-            log(f"    carry_hard: {len(carry_hard)} months, mean={carry_hard.mean()*100:.3f}%/m")
+            log(f"    carry_hard (cupom cambial): {len(carry_hard)} months, mean={carry_hard.mean()*100:.3f}%/m")
+        else:
+            embi = m.get('embi_spread', pd.Series(dtype=float))
+            if len(embi) > 12:
+                carry_hard = embi / 10000 / 12
+                self.features['carry_hard'] = carry_hard
+                log(f"    carry_hard (EMBI fallback): {len(carry_hard)} months, mean={carry_hard.mean()*100:.3f}%/m")
+        # Carry NTN-B
+        ntnb_5y = m.get('tesouro_ntnb_5y', m.get('ntnb_5y', pd.Series(dtype=float)))
+        if len(ntnb_5y) > 12:
+            carry_ntnb = ntnb_5y / 100 / 12
+            self.features['carry_ntnb'] = carry_ntnb
+            log(f"    carry_ntnb: {len(carry_ntnb)} months, mean={carry_ntnb.mean()*100:.3f}%/m")
+        # Z-score of IPCA expectations (for NTN-B model)
+        ipca_exp = m.get('ipca_exp_12m', pd.Series(dtype=float))
+        if len(ipca_exp) > 24:
+            self.features['Z_ipca_exp'] = self._z_score_rolling(ipca_exp)
+            log(f"    Z_ipca_exp: {len(self.features['Z_ipca_exp'])} months")
 
     def _build_cip_basis(self):
         """
@@ -1234,124 +1281,355 @@ class FeatureEngine:
                 self.features['Z_debt_accel'] = self._z_score_rolling(debt_accel)
                 log(f"    Z_debt_accel: {len(debt_accel)} months")
 
-    def _build_taylor_rule(self):
+    def _build_composite_equilibrium(self):
         """
-        Taylor Rule for rates equilibrium.
-        SELIC* = r* + π_e + α(π - π*) + β(y - y*)
-        where:
-          r* = neutral real rate (estimated from rolling ex-ante real rate)
-          π_e = inflation expectations (IPCA 12m ahead)
-          π* = inflation target (3.0% since 2024, 3.25% before)
-          π = current IPCA 12m
-          y = output gap proxy (IBC-BR deviation from HP trend)
-          α = 1.5 (Taylor coefficient on inflation gap)
-          β = 0.5 (Taylor coefficient on output gap)
+        Composite Equilibrium Rate Framework v1.0
+        Replaces the simple Taylor Rule with a 5-model composite estimator.
+
+        Models:
+          1. Fiscal-Augmented r*  — debt/GDP, primary balance, CDS, EMBI
+          2. Real Rate Parity r*  — US TIPS + country risk premium
+          3. Market-Implied r*    — ACM-style term structure decomposition
+          4. State-Space r*       — Kalman Filter with fiscal/external channels
+          5. Regime-Switching r*  — HMM regime-conditional r* (deferred to update_with_regime)
+
+        The composite r* is combined into SELIC* via regime-dependent Taylor coefficients.
         """
-        log("\n  Building Taylor Rule rates equilibrium...")
+        from composite_equilibrium import (
+            FiscalAugmentedRStar, RealRateParityRStar,
+            MarketImpliedRStar, StateSpaceRStar, CompositeEquilibriumRate
+        )
+
+        log("\n  Building Composite Equilibrium Rate (5-model framework)...")
         m = self.dl.monthly
+
+        # === Load all required data ===
         selic = m.get('selic_over', pd.Series(dtype=float))
         if len(selic) == 0:
             selic = m.get('selic_target', pd.Series(dtype=float))
-        ipca_12m = m.get('ipca_yoy', pd.Series(dtype=float))  # DataLayer key is 'ipca_yoy'
+        ipca_12m = m.get('ipca_yoy', pd.Series(dtype=float))
         ipca_exp = m.get('ipca_exp', pd.Series(dtype=float))
         ibc_br = m.get('ibc_br', pd.Series(dtype=float))
         di_1y = m.get('di_1y', pd.Series(dtype=float))
+        di_2y = m.get('di_2y', pd.Series(dtype=float))
+        di_3y = m.get('di_3y', pd.Series(dtype=float))
         di_5y = m.get('di_5y', pd.Series(dtype=float))
         di_10y = m.get('di_10y', pd.Series(dtype=float))
+        di_3m = m.get('di_3m', pd.Series(dtype=float))
+        di_6m = m.get('di_6m', pd.Series(dtype=float))
+        debt_gdp = m.get('debt_gdp', pd.Series(dtype=float))
+        primary_bal = m.get('primary_balance', pd.Series(dtype=float))
+        cds_5y = m.get('cds_5y', pd.Series(dtype=float))
+        embi = m.get('embi_spread', pd.Series(dtype=float))
+        us_tips_5y = m.get('us_tips_5y', pd.Series(dtype=float))
+        us_tips_10y = m.get('us_tips_10y', pd.Series(dtype=float))
+        vix = m.get('vix', pd.Series(dtype=float))
+        bop_current = m.get('bop_current', pd.Series(dtype=float))
+        tot = m.get('tot', pd.Series(dtype=float))
 
         # Need at minimum SELIC and IPCA
         if len(selic) < 24 or len(ipca_12m) < 24:
-            log(f"    Insufficient data for Taylor Rule (selic={len(selic)}, ipca={len(ipca_12m)})")
+            log(f"    Insufficient data for equilibrium (selic={len(selic)}, ipca={len(ipca_12m)})")
             return
 
+        # === Build inflation target series ===
         common = selic.index.intersection(ipca_12m.index)
         if len(ipca_exp) > 12:
             common = common.intersection(ipca_exp.index)
-
-        selic_c = selic.reindex(common)
-        ipca_c = ipca_12m.reindex(common)
-
-        # Inflation expectations (use IPCA expectations if available, else IPCA 12m as proxy)
-        if len(ipca_exp) > 12:
-            pi_e = ipca_exp.reindex(common).ffill()
-        else:
-            pi_e = ipca_c.rolling(6, min_periods=3).mean()  # Smoothed IPCA as proxy
-
-        # Inflation target: 4.5% until 2017, 4.25% in 2018, 4.0% in 2019, 3.75% in 2020, 3.5% in 2021, 3.25% in 2022-2023, 3.0% from 2024
         pi_star = pd.Series(index=common, dtype=float)
         for dt in common:
             yr = dt.year
-            if yr <= 2017:
-                pi_star[dt] = 4.5
-            elif yr == 2018:
-                pi_star[dt] = 4.25
-            elif yr == 2019:
-                pi_star[dt] = 4.0
-            elif yr == 2020:
-                pi_star[dt] = 3.75
-            elif yr == 2021:
-                pi_star[dt] = 3.5
-            elif yr <= 2023:
-                pi_star[dt] = 3.25
+            if yr <= 2017: pi_star[dt] = 4.5
+            elif yr == 2018: pi_star[dt] = 4.25
+            elif yr == 2019: pi_star[dt] = 4.0
+            elif yr == 2020: pi_star[dt] = 3.75
+            elif yr == 2021: pi_star[dt] = 3.5
+            elif yr <= 2023: pi_star[dt] = 3.25
+            else: pi_star[dt] = 3.0
+        self._pi_star_series = pi_star
+
+        # === Model 1: Fiscal-Augmented r* ===
+        model_results = {}
+        try:
+            fiscal_model = FiscalAugmentedRStar(window=60, prior_weight=0.3)
+            rstar_fiscal, decomp = fiscal_model.estimate(
+                selic, ipca_exp, debt_gdp, primary_bal, cds_5y, embi
+            )
+            if len(rstar_fiscal) > 12:
+                model_results['fiscal'] = rstar_fiscal
+                self._fiscal_decomposition = decomp
+                log(f"    Model 1 (Fiscal): {len(rstar_fiscal)} months, current r*={rstar_fiscal.iloc[-1]:.2f}%")
             else:
-                pi_star[dt] = 3.0
+                log("    Model 1 (Fiscal): insufficient data")
+        except Exception as e:
+            log(f"    Model 1 (Fiscal) error: {e}")
 
-        # Neutral real rate: use a structurally anchored r* for Brazil
-        # BCB's own estimates put r* at 4.0-5.0% in recent years
-        # We use a slow-moving anchor: 10-year rolling median of ex-ante real rate,
-        # clipped to [3.0, 6.0] to avoid extremes from crisis periods
-        ex_ante_real = selic_c - pi_e
-        r_star = ex_ante_real.rolling(120, min_periods=36).median()
-        r_star = r_star.clip(lower=3.0, upper=6.0)
-        # Fill early NaN with 4.5% (BCB consensus neutral rate)
-        r_star = r_star.fillna(4.5)
+        # === Model 2: Real Rate Parity r* ===
+        try:
+            parity_model = RealRateParityRStar(window=60)
+            rstar_parity = parity_model.estimate(
+                us_tips_5y, us_tips_10y, cds_5y, embi, vix,
+                debt_gdp, bop_current, tot
+            )
+            if len(rstar_parity) > 12:
+                model_results['parity'] = rstar_parity
+                log(f"    Model 2 (Parity): {len(rstar_parity)} months, current r*={rstar_parity.iloc[-1]:.2f}%")
+            else:
+                log("    Model 2 (Parity): insufficient data")
+        except Exception as e:
+            log(f"    Model 2 (Parity) error: {e}")
 
-        # Output gap proxy from IBC-BR (if available)
-        output_gap = pd.Series(0.0, index=common)
-        if len(ibc_br) > 36:
-            ibc_common = ibc_br.reindex(common).ffill()
-            if ibc_common.notna().sum() > 24:
-                # HP filter approximation: deviation from 5-year rolling mean
-                ibc_trend = ibc_common.rolling(60, min_periods=24).mean()
-                output_gap = ((ibc_common / ibc_trend) - 1) * 100  # % deviation
-                output_gap = output_gap.clip(-5, 5).fillna(0)  # Clip extremes
+        # === Model 3: Market-Implied r* (ACM) ===
+        try:
+            acm_model = MarketImpliedRStar(n_factors=3, window=60)
+            rstar_market, tp_market = acm_model.estimate(
+                di_3m, di_6m, di_1y, di_2y, di_3y, di_5y, di_10y,
+                ipca_exp=ipca_exp
+            )
+            if len(rstar_market) > 12:
+                model_results['market_implied'] = rstar_market
+                self._acm_term_premium = tp_market
+                log(f"    Model 3 (ACM): {len(rstar_market)} months, current r*={rstar_market.iloc[-1]:.2f}%")
+            else:
+                log("    Model 3 (ACM): insufficient data")
+        except Exception as e:
+            log(f"    Model 3 (ACM) error: {e}")
 
-        # Modified Taylor Rule for Brazil:
-        # SELIC* = r* + π_e + α*(π - π*) + β*(y - y*)
-        # Using α=1.0 (not 1.5) because Brazil already has structurally high inflation
-        # and the BCB reacts less aggressively than the original Taylor prescription
-        alpha_taylor = 1.0  # Inflation gap coefficient (lower for EM)
-        beta_taylor = 0.3   # Output gap coefficient (lower weight)
-        inflation_gap = ipca_c - pi_star
-        selic_star = r_star + pi_e + alpha_taylor * inflation_gap + beta_taylor * output_gap
-        selic_star = selic_star.dropna()
+        # === Model 4: State-Space r* (Kalman) ===
+        try:
+            kalman_model = StateSpaceRStar(window=120)
+            rstar_kalman = kalman_model.estimate(
+                selic, ipca_12m, ipca_exp, ibc_br, debt_gdp, cds_5y
+            )
+            if len(rstar_kalman) > 12:
+                model_results['state_space'] = rstar_kalman
+                log(f"    Model 4 (Kalman): {len(rstar_kalman)} months, current r*={rstar_kalman.iloc[-1]:.2f}%")
+            else:
+                log("    Model 4 (Kalman): insufficient data")
+        except Exception as e:
+            log(f"    Model 4 (Kalman) error: {e}")
+
+        # Store intermediate results for regime update
+        self._eq_model_results = model_results
+        self._eq_selic = selic
+        self._eq_ipca_12m = ipca_12m
+        self._eq_ipca_exp = ipca_exp
+        self._eq_ibc_br = ibc_br
+        self._eq_di_1y = di_1y
+        self._eq_di_5y = di_5y
+        self._eq_di_10y = di_10y
+
+        # === Initial composite (without regime — use base weights) ===
+        if len(model_results) > 0:
+            compositor = CompositeEquilibriumRate()
+            # Use neutral regime probs for initial estimate
+            neutral_probs = {'P_carry': 0.5, 'P_riskoff': 0.25, 'P_stress': 0.25}
+            composite_rstar, selic_star = compositor.compute(
+                model_results, neutral_probs, ipca_12m, ipca_exp,
+                ibc_br, selic, pi_star
+            )
+
+            if len(selic_star) > 12:
+                self._taylor_selic_star = selic_star
+                self.features['taylor_selic_star'] = selic_star
+                self._composite_rstar = composite_rstar
+                self._compositor = compositor
+
+                selic_c = selic.reindex(selic_star.index)
+                taylor_gap = selic_c - selic_star
+                self.features['taylor_gap'] = taylor_gap
+                self.features['Z_taylor_gap'] = self._z_score_rolling(taylor_gap.dropna())
+
+                log(f"    Composite r*: {composite_rstar.iloc[-1]:.2f}% (real)")
+                log(f"    Composite SELIC*: {selic_star.iloc[-1]:.2f}% (nominal)")
+                log(f"    Taylor gap: {taylor_gap.iloc[-1]:.2f}pp")
+                log(f"    Models active: {list(model_results.keys())}")
+                for name, contrib in compositor.model_contributions.items():
+                    log(f"      {name}: weight={contrib['weight']:.1%}, r*={contrib['current_value']:.2f}%")
+
+                # Fair values for rates instruments
+                self._front_fair = round(float(selic_star.iloc[-1]), 2)
+
+                # Term structure fair values using composite SELIC*
+                selic_c = selic.reindex(common)
+                if len(di_1y) > 12 and len(di_5y) > 12:
+                    di_common = di_1y.index.intersection(di_5y.index).intersection(selic_star.index)
+                    if len(di_common) > 12:
+                        hist_tp_5y = (di_5y.reindex(di_common) - selic_c.reindex(di_common)).rolling(60, min_periods=24).mean()
+                        if hist_tp_5y.notna().sum() > 0:
+                            tp_5y_current = float(hist_tp_5y.iloc[-1]) if pd.notna(hist_tp_5y.iloc[-1]) else 1.0
+                            self._belly_fair = round(float(selic_star.iloc[-1]) + tp_5y_current, 2)
+                            log(f"    Belly fair (SELIC* + TP_5Y): {self._belly_fair:.2f}%")
+
+                # === NEW: Derive ML-ready features from composite equilibrium ===
+                self._build_equilibrium_ml_features(composite_rstar, selic_star, selic, di_1y, di_5y)
+
+                if len(di_10y) > 12:
+                    di10_common = di_10y.index.intersection(selic_star.index)
+                    if len(di10_common) > 12:
+                        hist_tp_10y = (di_10y.reindex(di10_common) - selic_c.reindex(di10_common)).rolling(60, min_periods=24).mean()
+                        if hist_tp_10y.notna().sum() > 0:
+                            tp_10y_current = float(hist_tp_10y.iloc[-1]) if pd.notna(hist_tp_10y.iloc[-1]) else 1.5
+                            self._long_fair = round(float(selic_star.iloc[-1]) + tp_10y_current, 2)
+                            log(f"    Long fair (SELIC* + TP_10Y): {self._long_fair:.2f}%")
+            else:
+                log("    Insufficient data for composite equilibrium")
+        else:
+            log("    No models produced valid r* estimates — falling back")
+
+    def _build_equilibrium_ml_features(self, composite_rstar, selic_star, selic, di_1y, di_5y):
+        """
+        Build ML-ready features from the composite equilibrium framework.
+        These features capture the predictive power of the r* methodology
+        for instrument-level return prediction.
+
+        Features created:
+          - Z_policy_gap: z-scored SELIC - SELIC* (policy stance)
+          - Z_rstar_composite: z-scored composite r* level
+          - Z_rstar_momentum: z-scored 6m change in r*
+          - Z_fiscal_component: z-scored fiscal component of r*
+          - Z_sovereign_component: z-scored sovereign component of r*
+          - Z_selic_star_gap: z-scored DI_1Y - SELIC* (market pricing vs equilibrium)
+          - rstar_regime_signal: categorical signal (-1/0/+1 for accommodative/neutral/restrictive)
+        """
+        log("\n  Building equilibrium ML features...")
+
+        # 1. Z_policy_gap: SELIC - SELIC* (positive = restrictive, negative = accommodative)
+        if len(selic_star) > 24 and len(selic) > 24:
+            common = selic.index.intersection(selic_star.index)
+            policy_gap = selic.reindex(common) - selic_star.reindex(common)
+            policy_gap = policy_gap.dropna()
+            if len(policy_gap) > 24:
+                self.features['policy_gap'] = policy_gap
+                self.features['Z_policy_gap'] = self._z_score_rolling(policy_gap)
+                log(f"    Z_policy_gap: {len(self.features['Z_policy_gap'])} months, current={policy_gap.iloc[-1]:.2f}pp")
+
+        # 2. Z_rstar_composite: level of composite r* (high r* = tight financial conditions)
+        if len(composite_rstar) > 24:
+            self.features['rstar_composite'] = composite_rstar
+            self.features['Z_rstar_composite'] = self._z_score_rolling(composite_rstar)
+            log(f"    Z_rstar_composite: {len(self.features['Z_rstar_composite'])} months, current={composite_rstar.iloc[-1]:.2f}%")
+
+        # 3. Z_rstar_momentum: 6m change in r* (rising r* = bearish for receivers)
+        if len(composite_rstar) > 30:
+            rstar_mom = composite_rstar.diff(6)
+            rstar_mom = rstar_mom.dropna()
+            if len(rstar_mom) > 24:
+                self.features['rstar_momentum'] = rstar_mom
+                self.features['Z_rstar_momentum'] = self._z_score_rolling(rstar_mom)
+                log(f"    Z_rstar_momentum: {len(self.features['Z_rstar_momentum'])} months, current={rstar_mom.iloc[-1]:.2f}pp")
+
+        # 4. Z_fiscal_component: fiscal contribution to r* (from Model 1 decomposition)
+        if hasattr(self, '_fiscal_decomposition') and self._fiscal_decomposition:
+            fiscal_comp = self._fiscal_decomposition.get('fiscal', pd.Series(dtype=float))
+            if len(fiscal_comp) > 24:
+                self.features['fiscal_component'] = fiscal_comp
+                self.features['Z_fiscal_component'] = self._z_score_rolling(fiscal_comp)
+                log(f"    Z_fiscal_component: {len(self.features['Z_fiscal_component'])} months")
+
+            sovereign_comp = self._fiscal_decomposition.get('sovereign', pd.Series(dtype=float))
+            if len(sovereign_comp) > 24:
+                self.features['sovereign_component'] = sovereign_comp
+                self.features['Z_sovereign_component'] = self._z_score_rolling(sovereign_comp)
+                log(f"    Z_sovereign_component: {len(self.features['Z_sovereign_component'])} months")
+
+        # 5. Z_selic_star_gap: DI_1Y - SELIC* (market pricing vs equilibrium rate)
+        if len(selic_star) > 24 and len(di_1y) > 24:
+            common = di_1y.index.intersection(selic_star.index)
+            selic_star_gap = di_1y.reindex(common) - selic_star.reindex(common)
+            selic_star_gap = selic_star_gap.dropna()
+            if len(selic_star_gap) > 24:
+                self.features['selic_star_gap'] = selic_star_gap
+                self.features['Z_selic_star_gap'] = self._z_score_rolling(selic_star_gap)
+                log(f"    Z_selic_star_gap: {len(self.features['Z_selic_star_gap'])} months, current={selic_star_gap.iloc[-1]:.2f}pp")
+
+        # 6. rstar_regime_signal: categorical signal based on r* level
+        # Restrictive (r* > 6%) = +1, Neutral (3-6%) = 0, Accommodative (r* < 3%) = -1
+        if len(composite_rstar) > 24:
+            rstar_signal = pd.Series(0.0, index=composite_rstar.index)
+            rstar_signal[composite_rstar > 6.0] = 1.0   # Restrictive
+            rstar_signal[composite_rstar < 3.0] = -1.0  # Accommodative
+            # Intermediate zones: linear interpolation
+            mask_high = (composite_rstar > 4.5) & (composite_rstar <= 6.0)
+            rstar_signal[mask_high] = (composite_rstar[mask_high] - 4.5) / 1.5  # 0 to 1
+            mask_low = (composite_rstar >= 3.0) & (composite_rstar < 4.5)
+            rstar_signal[mask_low] = -(4.5 - composite_rstar[mask_low]) / 1.5  # 0 to -1
+            self.features['rstar_regime_signal'] = rstar_signal
+            log(f"    rstar_regime_signal: {len(rstar_signal)} months, current={rstar_signal.iloc[-1]:.2f}")
+
+        # 7. Z_rstar_curve_gap: DI_5Y - SELIC* (medium-term pricing vs equilibrium)
+        if len(selic_star) > 24 and len(di_5y) > 24:
+            common = di_5y.index.intersection(selic_star.index)
+            curve_gap = di_5y.reindex(common) - selic_star.reindex(common)
+            curve_gap = curve_gap.dropna()
+            if len(curve_gap) > 24:
+                self.features['Z_rstar_curve_gap'] = self._z_score_rolling(curve_gap)
+                log(f"    Z_rstar_curve_gap: {len(self.features['Z_rstar_curve_gap'])} months")
+
+    def update_equilibrium_with_regime(self, regime_probs_dict, regime_probs_df=None):
+        """
+        Update the composite equilibrium with actual regime probabilities.
+        Called AFTER RegimeModel.fit() in the ProductionEngine.step().
+
+        regime_probs_dict: dict {P_carry: float, P_riskoff: float, ...}
+        regime_probs_df: pd.DataFrame with full regime history (optional, for Model 5)
+        """
+        from composite_equilibrium import (
+            RegimeSwitchingRStar, CompositeEquilibriumRate
+        )
+
+        if not hasattr(self, '_eq_model_results') or len(self._eq_model_results) == 0:
+            return
+
+        model_results = self._eq_model_results.copy()
+
+        # === Model 5: Regime-Switching r* ===
+        if regime_probs_df is not None and len(regime_probs_df) > 12:
+            try:
+                regime_model = RegimeSwitchingRStar(window=60)
+                rstar_regime = regime_model.estimate(
+                    self._eq_selic, self._eq_ipca_exp, regime_probs_df
+                )
+                if len(rstar_regime) > 12:
+                    model_results['regime'] = rstar_regime
+                    log(f"    Model 5 (Regime): {len(rstar_regime)} months, current r*={rstar_regime.iloc[-1]:.2f}%")
+            except Exception as e:
+                log(f"    Model 5 (Regime) error: {e}")
+
+        # === Recompute composite with actual regime weights ===
+        compositor = CompositeEquilibriumRate()
+        composite_rstar, selic_star = compositor.compute(
+            model_results, regime_probs_dict,
+            self._eq_ipca_12m, self._eq_ipca_exp,
+            self._eq_ibc_br, self._eq_selic,
+            self._pi_star_series
+        )
 
         if len(selic_star) > 12:
-            # Store Taylor Rule fair rate
             self._taylor_selic_star = selic_star
             self.features['taylor_selic_star'] = selic_star
+            self._composite_rstar = composite_rstar
+            self._compositor = compositor
 
-            # Taylor Rule gap: actual SELIC - SELIC*
-            taylor_gap = selic_c.reindex(selic_star.index) - selic_star
+            selic_c = self._eq_selic.reindex(selic_star.index)
+            taylor_gap = selic_c - selic_star
             self.features['taylor_gap'] = taylor_gap
             self.features['Z_taylor_gap'] = self._z_score_rolling(taylor_gap.dropna())
-            log(f"    Taylor SELIC*: {len(selic_star)} months, current={selic_star.iloc[-1]:.2f}%")
-            log(f"    Taylor gap: {taylor_gap.iloc[-1]:.2f}pp (positive = tight, negative = loose)")
 
-            # Rates fair values:
-            # Front fair = Taylor SELIC* (short-term equilibrium)
             self._front_fair = round(float(selic_star.iloc[-1]), 2)
 
-            # Term structure fair values
-            if len(di_1y) > 12 and len(di_5y) > 12:
-                di_common = di_1y.index.intersection(di_5y.index).intersection(selic_star.index)
+            # Update term structure fair values
+            di_5y = self._eq_di_5y
+            di_10y = self._eq_di_10y
+            common = selic_c.index
+
+            if len(di_5y) > 12:
+                di_common = di_5y.index.intersection(selic_star.index)
                 if len(di_common) > 12:
-                    # Historical term premium: DI_5Y - SELIC
                     hist_tp_5y = (di_5y.reindex(di_common) - selic_c.reindex(di_common)).rolling(60, min_periods=24).mean()
                     if hist_tp_5y.notna().sum() > 0:
                         tp_5y_current = float(hist_tp_5y.iloc[-1]) if pd.notna(hist_tp_5y.iloc[-1]) else 1.0
                         self._belly_fair = round(float(selic_star.iloc[-1]) + tp_5y_current, 2)
-                        log(f"    Belly fair (SELIC* + TP_5Y): {self._belly_fair:.2f}%")
 
             if len(di_10y) > 12:
                 di10_common = di_10y.index.intersection(selic_star.index)
@@ -1360,9 +1638,17 @@ class FeatureEngine:
                     if hist_tp_10y.notna().sum() > 0:
                         tp_10y_current = float(hist_tp_10y.iloc[-1]) if pd.notna(hist_tp_10y.iloc[-1]) else 1.5
                         self._long_fair = round(float(selic_star.iloc[-1]) + tp_10y_current, 2)
-                        log(f"    Long fair (SELIC* + TP_10Y): {self._long_fair:.2f}%")
-        else:
-            log("    Insufficient data for Taylor Rule computation")
+
+            log(f"    Regime-updated composite r*: {composite_rstar.iloc[-1]:.2f}%")
+            log(f"    Regime-updated SELIC*: {selic_star.iloc[-1]:.2f}%")
+            for name, contrib in compositor.model_contributions.items():
+                log(f"      {name}: weight={contrib['weight']:.1%}, r*={contrib['current_value']:.2f}%")
+
+            # v4.0: Rebuild ML features with regime-updated r* and rebuild feature_df
+            di_1y = self._eq_di_1y if hasattr(self, '_eq_di_1y') else self.dl.monthly.get('di_1y', pd.Series(dtype=float))
+            di_5y = self._eq_di_5y if hasattr(self, '_eq_di_5y') else self.dl.monthly.get('di_5y', pd.Series(dtype=float))
+            self._build_equilibrium_ml_features(composite_rstar, selic_star, self._eq_selic, di_1y, di_5y)
+            self._build_feature_df()  # Rebuild to include updated equilibrium features
 
     def _build_feature_df(self):
         """Build aligned feature DataFrame."""
@@ -1395,20 +1681,35 @@ class AlphaModels:
     """Ridge regression walk-forward per instrument."""
 
     FEATURE_MAP = {
+        # v4.0: Enhanced with composite equilibrium features (r*, policy gap, fiscal/sovereign components)
         'fx':    ['Z_dxy', 'Z_vix', 'Z_cds_br', 'Z_real_diff', 'Z_tot', 'mu_fx_val', 'carry_fx',
                   'Z_cip_basis', 'Z_beer', 'Z_reer_gap', 'Z_hy_spread', 'Z_ewz', 'Z_iron_ore', 'Z_bop',
-                  'Z_focus_fx', 'Z_cftc_brl', 'Z_idp_flow', 'Z_portfolio_flow'],  # v3.7: +4 new features
+                  'Z_focus_fx', 'Z_cftc_brl', 'Z_idp_flow', 'Z_portfolio_flow',
+                  'Z_policy_gap', 'rstar_regime_signal'],  # v4.0: +2 equilibrium features
         'front': ['Z_real_diff', 'Z_infl_surprise', 'Z_fiscal', 'carry_front',
-                  'Z_term_premium', 'Z_us_real_yield', 'Z_pb_momentum', 'Z_portfolio_flow'],
+                  'Z_term_premium', 'Z_us_real_yield', 'Z_pb_momentum', 'Z_portfolio_flow',
+                  'Z_policy_gap', 'Z_rstar_composite', 'Z_rstar_momentum',
+                  'Z_selic_star_gap', 'rstar_regime_signal'],  # v4.0: +5 equilibrium features
         'belly': ['Z_real_diff', 'Z_fiscal', 'Z_cds_br', 'Z_dxy', 'carry_belly',
                   'Z_term_premium', 'Z_tp_5y', 'Z_us_real_yield', 'Z_fiscal_premium', 'Z_us_breakeven',
-                  'Z_portfolio_flow'],
+                  'Z_portfolio_flow',
+                  'Z_policy_gap', 'Z_rstar_composite', 'Z_rstar_momentum',
+                  'Z_fiscal_component', 'Z_selic_star_gap', 'rstar_regime_signal',
+                  'Z_rstar_curve_gap'],  # v4.0: +7 equilibrium features
         'long':  ['Z_fiscal', 'Z_dxy', 'Z_vix', 'Z_cds_br', 'carry_long',
                   'Z_term_premium', 'Z_fiscal_premium', 'Z_debt_accel', 'Z_us_real_yield',
-                  'Z_portfolio_flow'],
+                  'Z_portfolio_flow',
+                  'Z_policy_gap', 'Z_rstar_composite', 'Z_rstar_momentum',
+                  'Z_fiscal_component', 'Z_sovereign_component', 'rstar_regime_signal',
+                  'Z_rstar_curve_gap'],  # v4.0: +7 equilibrium features
         'hard':  ['Z_vix', 'Z_cds_br', 'Z_fiscal', 'Z_dxy', 'carry_hard',
                   'Z_hy_spread', 'Z_us_real_yield', 'Z_ewz', 'Z_us_breakeven',
-                  'Z_cftc_brl', 'Z_portfolio_flow'],
+                  'Z_cftc_brl', 'Z_portfolio_flow',
+                  'Z_rstar_composite', 'Z_fiscal_component', 'Z_sovereign_component',
+                  'rstar_regime_signal'],  # v5.0: cupom cambial DDI
+        'ntnb': ['carry_ntnb', 'Z_ipca_exp', 'Z_fiscal', 'Z_us_real_yield',
+                  'Z_us_breakeven', 'Z_dxy', 'Z_vix', 'Z_cds_br',
+                  'Z_rstar_composite', 'Z_fiscal_component'],  # v5.0: NTN-B model
     }
 
     def __init__(self, data_layer, feature_engine, config=None):
@@ -1516,10 +1817,109 @@ class EnsembleAlphaModels:
         self.oos_history = {}  # {instrument: {model_name: [(pred, real)]}}
         self.ensemble_weights = {}  # {instrument: {model_name: w}}
         self.hp_cache = {}  # v3.7: {instrument: {model_params}} from purged k-fold CV
+        # v4.2: Dual feature selection
+        self.feature_selector = DualFeatureSelector({
+            'enet_n_alphas': 50,
+            'enet_cv_folds': 5,
+            'enet_path_n_alphas': 100,
+            'boruta_iterations': 30,  # reduced for speed in walk-forward
+            'boruta_max_depth': 5,
+            'boruta_n_estimators': 150,
+            'stability_n_subsamples': 50,  # v5.1: increased from 30 for better stability
+            'stability_subsample_ratio': 0.8,
+        })
+        self.feature_selection_results = {}  # {instrument: FeatureSelectionResult.to_dict()}
+        self.selected_features = {}  # {instrument: {'lasso': [...], 'boruta': [...], 'final': [...]}}
+        # v5.2: Regime-adaptive feature selection
+        self._prev_dominant_regime = None  # track regime for adaptive re-selection
+        self._fs_refit_count = 0  # count of feature selection refits
+        self._fs_refit_cooldown = 6  # minimum months between regime-triggered refits
+        self._fs_last_refit_step = -999  # step of last refit
+        self._current_step = 0  # current walk-forward step
+
+    @property
+    def _regime_triggered_refit(self):
+        """Check if a regime-triggered refit flag is active (set per step, consumed per instrument loop)."""
+        return getattr(self, '_regime_refit_flag', False)
+
+    def update_regime_for_feature_selection(self, regime_probs):
+        """
+        v5.2: Detect regime change and trigger feature re-selection.
+        Called by ProductionEngine.step() before fit_and_predict().
+        
+        Logic:
+        - Determine dominant regime from probabilities (max P_carry/P_riskoff/P_stress)
+        - If dominant regime changed from previous step, set refit flag
+        - Respect cooldown period (minimum 6 months between regime-triggered refits)
+        - Log regime transitions for transparency
+        """
+        self._current_step += 1
+        self._regime_refit_flag = False
+        
+        # Determine dominant global regime
+        p_carry = regime_probs.get('P_carry', 0.33)
+        p_riskoff = regime_probs.get('P_riskoff', 0.33)
+        p_stress = regime_probs.get('P_stress', 0.33)
+        
+        regime_map = {'carry': p_carry, 'riskoff': p_riskoff, 'stress': p_stress}
+        dominant = max(regime_map, key=regime_map.get)
+        
+        # Check for regime change
+        if self._prev_dominant_regime is not None and dominant != self._prev_dominant_regime:
+            # Check cooldown
+            steps_since_last = self._current_step - self._fs_last_refit_step
+            if steps_since_last >= self._fs_refit_cooldown:
+                self._regime_refit_flag = True
+                self._fs_refit_count += 1
+                self._fs_last_refit_step = self._current_step
+                log(f"  [FS] v5.2 Regime change: {self._prev_dominant_regime} → {dominant} "
+                    f"(P_carry={p_carry:.2f}, P_riskoff={p_riskoff:.2f}, P_stress={p_stress:.2f}) "
+                    f"→ triggering feature re-selection (refit #{self._fs_refit_count})")
+                # Clear cached features to force re-selection for all instruments
+                self.selected_features.clear()
+            else:
+                log(f"  [FS] v5.2 Regime change: {self._prev_dominant_regime} → {dominant} "
+                    f"(cooldown: {steps_since_last}/{self._fs_refit_cooldown} months, skipping refit)")
+        
+        self._prev_dominant_regime = dominant
+
+    def _run_feature_selection(self, inst, X_w, y_w, available_feats):
+        """
+        v4.4: Run Elastic Net + Boruta + Interactions + Stability.
+        Elastic Net features → Ridge model (structural linear block).
+        Boruta-confirmed features → GBM/RF/XGBoost models (non-linear block).
+        """
+        try:
+            result = self.feature_selector.select(X_w, y_w, inst)
+            self.feature_selection_results[inst] = result.to_dict()
+            
+            # Elastic Net features for Ridge (structural linear block)
+            lasso_feats = result.enet_selected if result.enet_selected else available_feats
+            # Boruta features for tree models (non-linear block)
+            boruta_feats = result.boruta_confirmed + result.boruta_tentative
+            boruta_feats = boruta_feats if boruta_feats else available_feats
+            # Final merged features (for ensemble prediction) — includes confirmed interactions
+            final_feats = result.final_features if result.final_features else available_feats
+            
+            self.selected_features[inst] = {
+                'lasso': lasso_feats,
+                'boruta': boruta_feats,
+                'final': final_feats,
+            }
+            return lasso_feats, boruta_feats, final_feats
+        except Exception as e:
+            log(f"[FeatureSelection] {inst}: Failed ({e}), using all features")
+            self.selected_features[inst] = {
+                'lasso': available_feats,
+                'boruta': available_feats,
+                'final': available_feats,
+            }
+            return available_feats, available_feats, available_feats
 
     def fit_and_predict(self, asof_date):
         """
         Fit Ridge + GBM + RF + XGBoost per instrument, combine with adaptive weights.
+        v4.2: Uses dual feature selection — LASSO for Ridge, Boruta for tree models.
         Returns dict of {instrument: ensemble_mu}.
         """
         window = self.cfg['training_window_months']
@@ -1565,11 +1965,47 @@ class EnsembleAlphaModels:
             for col in X_w.columns:
                 X_w[col] = winsorize(X_w[col])
 
-            # Get latest features for prediction
+            # v5.2: Regime-adaptive feature selection
+            # Re-select features when: (a) first time, or (b) regime change detected
+            needs_reselection = inst not in self.selected_features or self._regime_triggered_refit
+            if needs_reselection:
+                lasso_feats, boruta_feats, final_feats = self._run_feature_selection(
+                    inst, X_w, y_w, available_feats
+                )
+            else:
+                lasso_feats = self.selected_features[inst]['lasso']
+                boruta_feats = self.selected_features[inst]['boruta']
+                final_feats = self.selected_features[inst]['final']
+
+            # v4.5: Compute confirmed interaction columns on training data
+            confirmed_ix = [f for f in final_feats if f.startswith('IX_')]
+            if confirmed_ix:
+                for feat_a, feat_b, name in INTERACTION_PAIRS:
+                    ix_col = f'IX_{name}'
+                    if ix_col in confirmed_ix and feat_a in X_w.columns and feat_b in X_w.columns:
+                        a_std = (X_w[feat_a] - X_w[feat_a].mean()) / (X_w[feat_a].std() + 1e-10)
+                        b_std = (X_w[feat_b] - X_w[feat_b].mean()) / (X_w[feat_b].std() + 1e-10)
+                        X_w[ix_col] = a_std * b_std
+                log(f"    [{inst}] v4.5: Added {len([c for c in confirmed_ix if c in X_w.columns])} "
+                    f"confirmed interaction features to training data")
+
+            # Get latest features for prediction (use final merged set)
             latest_feat = self.fe.get_features_at(asof_date, available_feats)
             if latest_feat is None or latest_feat.isna().all():
                 continue
             latest_feat = latest_feat.fillna(0)
+
+            # v4.5: Compute confirmed interaction columns on prediction data
+            if confirmed_ix:
+                for feat_a, feat_b, name in INTERACTION_PAIRS:
+                    ix_col = f'IX_{name}'
+                    if ix_col in confirmed_ix and feat_a in latest_feat.index and feat_b in latest_feat.index:
+                        # For single-row prediction, standardize using training stats
+                        if feat_a in X_w.columns and feat_b in X_w.columns:
+                            a_val = (latest_feat[feat_a] - X_w[feat_a].mean()) / (X_w[feat_a].std() + 1e-10)
+                            b_val = (latest_feat[feat_b] - X_w[feat_b].mean()) / (X_w[feat_b].std() + 1e-10)
+                            latest_feat[ix_col] = a_val * b_val
+
             X_pred = latest_feat.values.reshape(1, -1)
 
             inst_preds = {}
@@ -1577,43 +2013,54 @@ class EnsembleAlphaModels:
             # v3.7: Use CV-optimized hyperparameters if available
             hp = self.hp_cache.get(inst, {})
 
-            # --- Ridge ---
+            # v4.2: Build feature-specific training/prediction matrices
+            # LASSO features → Ridge (structural linear block)
+            # v4.5: Include confirmed interactions in both Ridge and tree models
+            lasso_avail = [f for f in lasso_feats if f in X_w.columns]
+            X_w_lasso = X_w[lasso_avail] if lasso_avail else X_w
+            X_pred_lasso = latest_feat[lasso_avail].values.reshape(1, -1) if lasso_avail else X_pred
+            # Boruta features → GBM/RF/XGBoost (non-linear block)
+            boruta_avail = [f for f in boruta_feats if f in X_w.columns]
+            X_w_boruta = X_w[boruta_avail] if boruta_avail else X_w
+            X_pred_boruta = latest_feat[boruta_avail].values.reshape(1, -1) if boruta_avail else X_pred
+
+            # --- Ridge (uses LASSO-selected structural features) ---
             try:
                 ridge_alpha = hp.get('ridge_alpha', ridge_lambda)
                 ridge = Ridge(alpha=ridge_alpha, fit_intercept=True)
-                ridge.fit(X_w.values, y_w.values)
-                mu_ridge = float(ridge.predict(X_pred)[0])
+                ridge.fit(X_w_lasso.values, y_w.values)
+                mu_ridge = float(ridge.predict(X_pred_lasso)[0])
                 inst_preds['ridge'] = mu_ridge
             except Exception:
                 inst_preds['ridge'] = 0.0
 
-            # --- GradientBoosting ---
+            # --- GradientBoosting (uses Boruta-confirmed features) ---
             try:
                 gbm_params = hp.get('gbm', {
                     'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05,
                     'subsample': 0.8, 'min_samples_leaf': 5, 'random_state': 42,
                 })
                 gbm = GradientBoostingRegressor(**gbm_params)
-                gbm.fit(X_w.values, y_w.values)
-                mu_gbm = float(gbm.predict(X_pred)[0])
+                gbm.fit(X_w_boruta.values, y_w.values)
+                mu_gbm = float(gbm.predict(X_pred_boruta)[0])
                 inst_preds['gbm'] = mu_gbm
             except Exception:
                 inst_preds['gbm'] = 0.0
 
-            # --- v3.7: Random Forest ---
+            # --- v3.7: Random Forest (uses Boruta-confirmed features) ---
             try:
                 rf_params = hp.get('rf', {
                     'n_estimators': 200, 'max_depth': 4, 'min_samples_leaf': 5,
                     'max_features': 'sqrt', 'random_state': 42, 'n_jobs': 1,
                 })
                 rf = RandomForestRegressor(**rf_params)
-                rf.fit(X_w.values, y_w.values)
-                mu_rf = float(rf.predict(X_pred)[0])
+                rf.fit(X_w_boruta.values, y_w.values)
+                mu_rf = float(rf.predict(X_pred_boruta)[0])
                 inst_preds['rf'] = mu_rf
             except Exception:
                 inst_preds['rf'] = 0.0
 
-            # --- v3.7: XGBoost ---
+            # --- v3.7: XGBoost (uses Boruta-confirmed features) ---
             try:
                 xgb_params = hp.get('xgb', {
                     'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05,
@@ -1621,8 +2068,8 @@ class EnsembleAlphaModels:
                     'reg_alpha': 0.1, 'reg_lambda': 1.0, 'random_state': 42, 'verbosity': 0,
                 })
                 xgb_model = xgb.XGBRegressor(**xgb_params)
-                xgb_model.fit(X_w.values, y_w.values)
-                mu_xgb = float(xgb_model.predict(X_pred)[0])
+                xgb_model.fit(X_w_boruta.values, y_w.values)
+                mu_xgb = float(xgb_model.predict(X_pred_boruta)[0])
                 inst_preds['xgb'] = mu_xgb
             except Exception:
                 inst_preds['xgb'] = 0.0
@@ -2073,6 +2520,25 @@ class RegimeModel:
             common_di = di_1y.index.intersection(di_10y.index)
             domestic_obs['di_slope'] = di_10y.reindex(common_di) - di_1y.reindex(common_di)
 
+        # D6: Policy gap (SELIC - SELIC*) — v4.0: from composite equilibrium
+        # Access from feature engine if already built
+        if self.dl and hasattr(self, '_feature_engine_ref') and self._feature_engine_ref:
+            fe = self._feature_engine_ref
+            if hasattr(fe, 'features') and 'policy_gap' in fe.features:
+                pg = fe.features['policy_gap']
+                if len(pg) > 12:
+                    domestic_obs['policy_gap'] = pg
+                    log(f"    D6: Policy gap added ({len(pg)} months)")
+
+        # D7: Fiscal premium component of r* — v4.0
+        if self.dl and hasattr(self, '_feature_engine_ref') and self._feature_engine_ref:
+            fe = self._feature_engine_ref
+            if hasattr(fe, 'features') and 'fiscal_component' in fe.features:
+                fc = fe.features['fiscal_component']
+                if len(fc) > 12:
+                    domestic_obs['fiscal_premium'] = fc
+                    log(f"    D7: Fiscal premium added ({len(fc)} months)")
+
         # Fit global HMM
         global_prob_df = self._fit_hmm(
             global_obs, n_states=3, asof_date=asof_date,
@@ -2333,7 +2799,7 @@ class Optimizer:
         
         bounds = []
         for inst in instruments:
-            max_w = limits.get(f'{inst}_weight_max', 2.0)
+            max_w = limits.get(f'{inst}_weight_max', 0.5)  # v5.1: conservative default (was 2.0)
             bounds.append((-max_w, max_w))
 
         # Optimize
@@ -2410,6 +2876,8 @@ class RiskOverlays:
                     w[k] *= 0.5
             if 'hard' in w:
                 w['hard'] *= 0.4
+            if 'ntnb' in w:
+                w['ntnb'] *= 0.4
             if 'front' in w:
                 w['front'] *= 0.7
             log(f"    RiskOverlay: circuit breaker triggered (P_riskoff={p_riskoff:.2f}, P_dom_stress={p_domestic_stress:.2f})")
@@ -2451,6 +2919,8 @@ class ProductionEngine:
         self.feature_engine.build_all()
         self.alpha_models = EnsembleAlphaModels(self.data_layer, self.feature_engine, self.cfg)
         self.regime_model = RegimeModel(self.data_layer, self.cfg)
+        # v4.0: Wire feature_engine ref so RegimeModel can access equilibrium features
+        self.regime_model._feature_engine_ref = self.feature_engine
         self.optimizer = Optimizer(self.data_layer, self.cfg)
         return self
 
@@ -2481,6 +2951,11 @@ class ProductionEngine:
         # 1. Fit regime
         regime_probs = self.regime_model.get_probs_at(asof_date)
 
+        # 1b. Update composite equilibrium with actual regime probabilities
+        if hasattr(self.feature_engine, 'update_equilibrium_with_regime'):
+            regime_probs_df = self.regime_model.regime_probs if hasattr(self.regime_model, 'regime_probs') else None
+            self.feature_engine.update_equilibrium_with_regime(regime_probs, regime_probs_df)
+
         # v3.7: Periodic hyperparameter selection via purged k-fold CV
         self.step_count += 1
         if self.step_count % self.hp_refit_interval == 1:  # refit every 12 steps
@@ -2507,7 +2982,11 @@ class ProductionEngine:
                         hp = self.alpha_models.select_hyperparameters(X.values, y.values, inst)
                         self.hp_cache[inst] = hp
 
-        # 2. Fit ensemble alpha models and predict mu
+        # 2. v5.2: Update regime info for adaptive feature selection
+        if hasattr(self.alpha_models, 'update_regime_for_feature_selection'):
+            self.alpha_models.update_regime_for_feature_selection(regime_probs)
+
+        # 2a. Fit ensemble alpha models and predict mu
         mu = self.alpha_models.fit_and_predict(asof_date)
 
         # 2b. IC-conditional gating: SOFT scaling (not zero-out) for instruments with low IC
@@ -2566,6 +3045,7 @@ class ProductionEngine:
             'belly': p_carry * 1.0 + p_riskoff * 0.4 + p_stress_global * 0.3,
             'long':  p_carry * 1.0 + p_riskoff * 0.3 + p_stress_global * 0.2,
             'hard':  p_carry * 1.0 + p_riskoff * 0.3 + p_stress_global * 0.2,
+            'ntnb':  p_carry * 1.0 + p_riskoff * 0.5 + p_stress_global * 0.3,
         }
         # Domestic regime scaling (softer — domestic stress is chronic in EM, not always actionable)
         # Only apply meaningful reduction when domestic stress is very high AND global is also stressed
@@ -2575,6 +3055,7 @@ class ProductionEngine:
             'belly': p_dom_calm * 1.0 + p_dom_stress * 0.80,
             'long':  p_dom_calm * 1.0 + p_dom_stress * 0.70,   # Long most sensitive to domestic
             'hard':  p_dom_calm * 1.0 + p_dom_stress * 0.90,   # Hard less affected by domestic
+            'ntnb':  p_dom_calm * 1.0 + p_dom_stress * 0.70,   # NTN-B affected by domestic inflation
         }
 
         for inst, m_val in mu_demeaned.items():
@@ -2836,16 +3317,19 @@ class BacktestHarness:
                 'belly_pnl': round(asset_pnl.get('belly', 0) * 100, 3),
                 'long_pnl': round(asset_pnl.get('long', 0) * 100, 3),
                 'hard_pnl': round(asset_pnl.get('hard', 0) * 100, 3),
+                'ntnb_pnl': round(asset_pnl.get('ntnb', 0) * 100, 3),
                 'weight_fx': round(weights.get('fx', 0), 4),
                 'weight_front': round(weights.get('front', 0), 4),
                 'weight_belly': round(weights.get('belly', 0), 4),
                 'weight_long': round(weights.get('long', 0), 4),
                 'weight_hard': round(weights.get('hard', 0), 4),
+                'weight_ntnb': round(weights.get('ntnb', 0), 4),
                 'mu_fx': round(mu.get('fx', 0) * 100, 3),
                 'mu_front': round(mu.get('front', 0) * 100, 3),
                 'mu_belly': round(mu.get('belly', 0) * 100, 3),
                 'mu_long': round(mu.get('long', 0) * 100, 3),
                 'mu_hard': round(mu.get('hard', 0) * 100, 3),
+                'mu_ntnb': round(mu.get('ntnb', 0) * 100, 3),
                 'P_carry': round(regime_probs.get('P_carry', 0), 3),
                 'P_riskoff': round(regime_probs.get('P_riskoff', 0), 3),
                 'P_stress': round(regime_probs.get('P_stress', 0), 3),
@@ -2982,7 +3466,7 @@ class BacktestHarness:
 
         # Hit rate per instrument
         hit_rates = {}
-        for inst in ['fx', 'front', 'belly', 'long', 'hard']:
+        for inst in ['fx', 'front', 'belly', 'long', 'hard', 'ntnb']:
             pnl_key = f'{inst}_pnl'
             pnls = [r[pnl_key] for r in records if pnl_key in r]
             if pnls:
@@ -2992,9 +3476,9 @@ class BacktestHarness:
         total_tc = sum(r['tc_pct'] for r in records)
         avg_turnover = np.mean([r['turnover'] for r in records])
 
-        # Attribution
+        # Attribution (all 6 instruments including NTN-B)
         attribution = {}
-        for inst in ['fx', 'front', 'belly', 'long', 'hard']:
+        for inst in ['fx', 'front', 'belly', 'long', 'hard', 'ntnb']:
             pnl_key = f'{inst}_pnl'
             total_pnl = sum(r[pnl_key] for r in records if pnl_key in r)
             attribution[inst] = round(total_pnl, 2)
@@ -3248,7 +3732,7 @@ class StressTestEngine:
 
         # Average weights during scenario
         avg_weights = {}
-        for inst in ['fx', 'front', 'belly', 'long', 'hard']:
+        for inst in ['fx', 'front', 'belly', 'long', 'hard', 'ntnb']:
             key = f'weight_{inst}'
             vals = [r.get(key, 0) for r in records]
             avg_weights[inst] = round(float(np.mean(vals)), 4)
@@ -3261,7 +3745,7 @@ class StressTestEngine:
 
         # PnL attribution during scenario
         attribution = {}
-        for inst in ['fx', 'front', 'belly', 'long', 'hard']:
+        for inst in ['fx', 'front', 'belly', 'long', 'hard', 'ntnb']:
             pnl_key = f'{inst}_pnl'
             total_pnl = sum(r.get(pnl_key, 0) for r in records)
             attribution[inst] = round(total_pnl, 3)
@@ -3321,7 +3805,7 @@ def run_v2(config=None):
 
     # Build output compatible with dashboard
     output = {
-        'version': 'v2.3',
+        'version': 'v4.2',
         'framework': 'overlay_on_cdi',
         'backtest': {
             'timeseries': harness.results,
@@ -3370,6 +3854,13 @@ def run_v2(config=None):
                     'X10_term_premium': 'Z_term_premium',
                     'X11_cip_basis': 'Z_cip_basis',
                     'X12_iron_ore': 'Z_iron_ore',
+                    # v4.0: Equilibrium-derived features
+                    'X13_policy_gap': 'Z_policy_gap',
+                    'X14_rstar_composite': 'Z_rstar_composite',
+                    'X15_rstar_momentum': 'Z_rstar_momentum',
+                    'X16_fiscal_component': 'Z_fiscal_component',
+                    'X17_sovereign_component': 'Z_sovereign_component',
+                    'X18_selic_star_gap': 'Z_selic_star_gap',
                 }
                 for key, col in z_map.items():
                     if col in last_feat.index:
@@ -3378,12 +3869,30 @@ def run_v2(config=None):
                             state_variables[key] = round(float(val), 2)
 
             # Build positions from last backtest row
-            instruments = ['fx', 'front', 'belly', 'long', 'hard']
+            # Compute per-instrument annualized volatility from rolling 36m returns
+            instruments = ['fx', 'front', 'belly', 'long', 'hard', 'ntnb']
+            inst_vol = {}
+            vol_window = 36  # months for rolling vol estimation
+            for inst in instruments:
+                if inst in ret_df.columns:
+                    avail = ret_df[inst].dropna()
+                    if len(avail) >= 12:
+                        recent = avail.iloc[-min(vol_window, len(avail)):]
+                        ann_vol = float(recent.std() * np.sqrt(12))  # annualized vol (decimal)
+                        inst_vol[inst] = max(ann_vol, 0.01)  # floor at 1%
+                    else:
+                        inst_vol[inst] = 0.10  # conservative default
+                else:
+                    inst_vol[inst] = 0.10  # conservative default
+
             positions = {}
             for inst in instruments:
                 w = last_row.get(f'weight_{inst}', 0)
-                mu_val = last_row.get(f'mu_{inst}', 0)
-                sharpe_val = mu_val / max(abs(mu_val) * 2, 0.01) if mu_val != 0 else 0
+                mu_val = last_row.get(f'mu_{inst}', 0)  # mu is in PERCENTAGE (already *100 from records)
+                # Convert back to decimal and annualize for Sharpe: mu_ann = (mu_pct/100) * 12
+                mu_ann_decimal = (mu_val / 100.0) * 12  # annualized mu in decimal
+                vol_ann = inst_vol.get(inst, 0.10)  # annualized vol in decimal
+                sharpe_val = mu_ann_decimal / vol_ann if vol_ann > 0 else 0
                 if inst == 'fx':
                     # FX instrument is defined as 'long USD': mu_fx > 0 means USD appreciates = SHORT BRL
                     dir_str = 'SHORT BRL' if mu_val > 0 else 'LONG BRL' if mu_val < 0 else 'NEUTRAL'
@@ -3391,9 +3900,10 @@ def run_v2(config=None):
                     dir_str = 'LONG' if mu_val > 0 else 'SHORT' if mu_val < 0 else 'NEUTRAL'
                 positions[inst] = {
                     'weight': round(w, 3),
-                    'expected_return_3m': round(mu_val * 100 * 0.25, 2),
-                    'expected_return_6m': round(mu_val * 100 * 0.5, 2),
+                    'expected_return_3m': round(mu_val * 3, 2),  # mu_val is already in % (monthly), * 3 months
+                    'expected_return_6m': round(mu_val * 6, 2),  # mu_val is already in % (monthly), * 6 months
                     'sharpe': round(sharpe_val, 2),
+                    'annualized_vol': round(vol_ann * 100, 2),  # vol in % for display
                     'risk_unit': round(abs(w) * 0.01, 4),
                     'risk_contribution': round(abs(w) / max(sum(abs(last_row.get(f'weight_{i}', 0)) for i in instruments), 0.01), 3),
                     'direction': dir_str,
@@ -3408,6 +3918,12 @@ def run_v2(config=None):
             ust_2y = 0
             ust_10y = 0
             embi_spread = 0
+            # Cupom cambial and NTN-B fields initialized here, populated after _read_last is defined
+            cupom_360 = None
+            cupom_30 = None
+            cip_basis = None
+            ntnb_5y_yield = None
+            ntnb_10y_yield = None
             vix_val = 0
             dxy_val = 0
             ppp_fair = 0
@@ -3463,7 +3979,15 @@ def run_v2(config=None):
                 embi_spread = _read_last('CDS_5Y.csv') / 0.7  # Reverse CDS proxy
             if embi_spread > 2000:
                 embi_spread = embi_spread / 100  # Normalize if in wrong units
-
+            # Populate cupom cambial and NTN-B fields (now that _read_last is defined)
+            cupom_360 = _read_last('SWAP_DIXDOL_360D.csv') or None
+            cupom_30 = _read_last('SWAP_DIXDOL_30D.csv') or _read_last('FX_CUPOM_1M.csv') or None
+            if cupom_360 is not None and ust_10y > 0:
+                if di_5y == 0:
+                    di_5y = _read_last('DI_5Y.csv') or _read_last('SWAP_PRE_360D.csv') or 0
+                cip_basis = di_5y - cupom_360 - ust_10y if di_5y else None
+            ntnb_5y_yield = _read_last('TESOURO_NTNB_5Y.csv') or _read_last('NTNB_5Y.csv') or None
+            ntnb_10y_yield = _read_last('TESOURO_NTNB_10Y.csv') or _read_last('NTNB_10Y.csv') or None
             # FX fair values from feature engine
             if hasattr(engine.feature_engine, '_ppp_fair'):
                 ppp_fair = engine.feature_engine._ppp_fair
@@ -3535,6 +4059,7 @@ def run_v2(config=None):
                 'positions': positions,
                 'selic_target': round(selic_target, 2),
                 'di_1y': round(di_1y, 2),
+                'di_2y': round(_read_last('DI_2Y.csv'), 2),
                 'di_5y': round(di_5y, 2),
                 'di_10y': round(di_10y, 2),
                 'ust_2y': round(ust_2y, 2),
@@ -3554,6 +4079,15 @@ def run_v2(config=None):
                 'term_premium': round(term_premium, 2),
                 'taylor_gap': taylor_gap_val,
                 'portfolio_vol': round(port_vol * 100, 2) if port_vol < 1 else round(port_vol, 2),
+                # NTN-B yields
+                'ntnb_5y_yield': round(ntnb_5y_yield, 2) if ntnb_5y_yield else 0,
+                'ntnb_10y_yield': round(ntnb_10y_yield, 2) if ntnb_10y_yield else 0,
+                # Cupom cambial
+                'cupom_cambial_360d': round(cupom_360, 2) if cupom_360 else 0,
+                'cupom_cambial_30d': round(cupom_30, 2) if cupom_30 else 0,
+                'cip_basis': round(cip_basis, 2) if cip_basis else 0,
+                # IPCA Expectations 12M
+                'ipca_exp_12m': round(float(ipca_exp.iloc[-1]), 2) if hasattr(ipca_exp, 'iloc') and len(ipca_exp) > 0 else 0,
             }
 
     # ============================================================
@@ -3561,6 +4095,90 @@ def run_v2(config=None):
     # ============================================================
     if harness.engine and harness.engine.feature_engine:
         fe = harness.engine.feature_engine
+
+        # Add composite equilibrium breakdown if available
+        log(f"  [EQ-DEBUG] has _compositor={hasattr(fe, '_compositor')}, is_not_None={getattr(fe, '_compositor', None) is not None}")
+        log(f"  [EQ-DEBUG] has _composite_rstar={hasattr(fe, '_composite_rstar')}, has _eq_model_results={hasattr(fe, '_eq_model_results')}")
+        log(f"  [EQ-DEBUG] output has 'current' key: {'current' in output}")
+        try:
+            if hasattr(fe, '_compositor') and fe._compositor is not None:
+                compositor = fe._compositor
+                eq_data = {
+                    'composite_rstar': round(float(fe._composite_rstar.iloc[-1]), 2) if hasattr(fe, '_composite_rstar') and len(fe._composite_rstar) > 0 else None,
+                    'model_contributions': compositor.model_contributions,
+                    'method': 'composite_5model',
+                }
+                # Add individual model r* values
+                if hasattr(fe, '_eq_model_results'):
+                    for name, series in fe._eq_model_results.items():
+                        if len(series) > 0:
+                            eq_data[f'rstar_{name}'] = round(float(series.iloc[-1]), 2)
+                # Add SELIC* (equilibrium policy rate)
+                if hasattr(fe, '_taylor_selic_star') and len(fe._taylor_selic_star) > 0:
+                    eq_data['selic_star'] = round(float(fe._taylor_selic_star.iloc[-1]), 2)
+                # Add fiscal decomposition if available (serialize to last values only)
+                if hasattr(fe, '_fiscal_decomposition') and fe._fiscal_decomposition:
+                    fd = fe._fiscal_decomposition
+                    eq_data['fiscal_decomposition'] = {
+                        k: round(float(v.iloc[-1]), 2) if hasattr(v, 'iloc') and len(v) > 0 else v
+                        for k, v in fd.items()
+                    }
+                # Add ACM term premium if available
+                if hasattr(fe, '_acm_term_premium') and fe._acm_term_premium is not None and len(fe._acm_term_premium) > 0:
+                    eq_data['acm_term_premium_5y'] = round(float(fe._acm_term_premium.iloc[-1]), 2)
+                # Add regime weights info
+                eq_data['regime_weights'] = {
+                    'carry': compositor.REGIME_WEIGHTS.get('carry', {}),
+                    'riskoff': compositor.REGIME_WEIGHTS.get('riskoff', {}),
+                    'domestic_stress': compositor.REGIME_WEIGHTS.get('domestic_stress', {}),
+                }
+                if 'current' in output:
+                    output['current']['equilibrium'] = eq_data
+                    log(f"  [EQ-DEBUG] Successfully added equilibrium to output['current']")
+                    # v4.3: Add feature selection results with stability + temporal tracking
+                    if hasattr(harness.engine, 'alpha_models') and hasattr(harness.engine.alpha_models, 'feature_selection_results'):
+                        fs_results = harness.engine.alpha_models.feature_selection_results
+                        if fs_results:
+                            output['current']['feature_selection'] = fs_results
+                            output['feature_selection'] = fs_results
+                            total_feats = sum(r.get('total_features', 0) for r in fs_results.values())
+                            final_feats = sum(r.get('final', {}).get('n_features', 0) for r in fs_results.values())
+                            log(f"  [FS] Feature selection: {final_feats}/{total_feats} features retained across all instruments")
+                            
+                            # v5.2: Add regime-adaptive FS metadata
+                            alpha_models = harness.engine.alpha_models
+                            if hasattr(alpha_models, '_fs_refit_count'):
+                                output['feature_selection_regime_adaptive'] = {
+                                    'regime_triggered_refits': alpha_models._fs_refit_count,
+                                    'cooldown_months': alpha_models._fs_refit_cooldown,
+                                    'current_dominant_regime': alpha_models._prev_dominant_regime,
+                                    'total_steps': alpha_models._current_step,
+                                }
+                                log(f"  [FS] v5.2 Regime-adaptive: {alpha_models._fs_refit_count} regime-triggered refits "
+                                    f"across {alpha_models._current_step} steps")
+                            
+                            # v4.3: Temporal tracking — save snapshot and detect changes
+                            try:
+                                from feature_selection import TemporalSelectionTracker
+                                run_date = output.get('current', {}).get('date', datetime.now().strftime('%Y-%m-%d'))
+                                TemporalSelectionTracker.save_snapshot(fs_results, run_date)
+                                temporal_changes = TemporalSelectionTracker.detect_changes(fs_results)
+                                temporal_summary = TemporalSelectionTracker.build_temporal_summary()
+                                rolling_stability = TemporalSelectionTracker.build_rolling_stability(window_months=12)
+                                output['feature_selection_temporal'] = {
+                                    'changes': temporal_changes,
+                                    'summary': temporal_summary,
+                                    'rolling_stability': rolling_stability,
+                                }
+                                log(f"  [FS] Temporal tracking: {temporal_summary.get('n_snapshots', 0)} snapshots, rolling window: {rolling_stability.get('n_snapshots', 0)}")
+                            except Exception as te:
+                                log(f"  [FS] Temporal tracking failed: {te}")
+                else:
+                    log(f"  [EQ-DEBUG] WARNING: output['current'] does not exist!")
+            else:
+                log(f"  [EQ-DEBUG] _compositor not available, skipping equilibrium")
+        except Exception as e:
+            log(f"  [EQ-DEBUG] ERROR adding equilibrium: {e}")
         dl = harness.engine.data_layer
         feat_df = fe.feature_df
         m = dl.monthly
@@ -3574,6 +4192,13 @@ def run_v2(config=None):
             'Z_X5_dolar_global': 'Z_dxy',
             'Z_X6_risk_global': 'Z_vix',
             'Z_X7_hiato': 'Z_hiato',
+            # v4.0: Equilibrium-derived features
+            'Z_X13_policy_gap': 'Z_policy_gap',
+            'Z_X14_rstar_composite': 'Z_rstar_composite',
+            'Z_X15_rstar_momentum': 'Z_rstar_momentum',
+            'Z_X16_fiscal_component': 'Z_fiscal_component',
+            'Z_X17_sovereign_component': 'Z_sovereign_component',
+            'Z_X18_selic_star_gap': 'Z_selic_star_gap',
         }
         if feat_df is not None and len(feat_df) > 0:
             state_vars_ts = []
@@ -3716,6 +4341,48 @@ def run_v2(config=None):
         n_dates = len(set(s['date'] for s in shap_history))
         n_instruments = len(set(s['instrument'] for s in shap_history))
         log(f"  SHAP history: {len(shap_history)} entries, {n_dates} dates, {n_instruments} instruments")
+
+    # ============================================================
+    # v5.7: r* TIMESERIES (composite equilibrium rate history)
+    # ============================================================
+    rstar_ts = []
+    try:
+        if harness.engine and harness.engine.feature_engine:
+            fe = harness.engine.feature_engine
+            if hasattr(fe, '_composite_rstar') and fe._composite_rstar is not None and len(fe._composite_rstar) > 0:
+                composite = fe._composite_rstar
+                selic_star_s = getattr(fe, '_taylor_selic_star', pd.Series(dtype=float))
+                eq_models = getattr(fe, '_eq_model_results', {})
+                m = fe.dl.monthly if hasattr(fe, 'dl') else {}
+                # Use selic_over (annualized % p.a.) for selic_actual display
+                # selic_meta/selic_target is daily rate in decimal (0.055 = 5.5% daily annualized)
+                selic_s = m.get('selic_over', m.get('selic_target', pd.Series(dtype=float)))
+                # If values are < 1, they're in decimal form → convert to %
+                if len(selic_s) > 0 and selic_s.iloc[-1] < 1:
+                    selic_s = selic_s * 100  # Convert decimal to %
+                ipca_exp = m.get('ipca_exp_12m', m.get('ipca_exp', pd.Series(dtype=float)))
+
+                for dt in composite.index:
+                    dt_str = dt.strftime('%Y-%m') if hasattr(dt, 'strftime') else str(dt)[:7]
+                    point = {
+                        'date': dt_str,
+                        'composite_rstar': round(float(composite.loc[dt]), 4),
+                    }
+                    if dt in selic_star_s.index:
+                        point['selic_star'] = round(float(selic_star_s.loc[dt]), 4)
+                    for name, series in eq_models.items():
+                        if dt in series.index:
+                            point[f'rstar_{name}'] = round(float(series.loc[dt]), 4)
+                    if dt in selic_s.index:
+                        point['selic_actual'] = round(float(selic_s.loc[dt]), 4)
+                    if dt in ipca_exp.index:
+                        point['ipca_exp'] = round(float(ipca_exp.loc[dt]), 4)
+                    rstar_ts.append(point)
+
+                log(f"  r* timeseries: {len(rstar_ts)} monthly points")
+    except Exception as e:
+        log(f"  r* timeseries generation failed: {e}")
+    output['rstar_ts'] = rstar_ts
 
     return output
 

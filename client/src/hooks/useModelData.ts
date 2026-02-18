@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import { trpc } from '@/lib/trpc';
-import { dashboardData, timeseriesData, regimeData, cyclicalData } from '@/data/modelData';
+import { dashboardData, timeseriesData, regimeData, cyclicalData, stateVariablesData, scoreData, rstarTsData, backtestData, shapImportanceData, shapHistoryData, featureSelectionData, featureSelectionTemporalData } from '@/data/modelData';
 
 // ============================================================
-// MACRO RISK OS - Cross-Asset Dashboard Types
+// ARC MACRO - Cross-Asset Dashboard Types
 // ============================================================
 
 /** Position sizing for a single asset class */
@@ -12,6 +12,7 @@ export interface AssetPosition {
   expected_return_3m: number;
   expected_return_6m: number;
   sharpe: number;
+  annualized_vol: number;
   risk_unit: number;
   risk_contribution: number;
   direction: string;
@@ -56,7 +57,33 @@ export interface StressTestV23 {
 
 export type StressTest = StressTestLegacy;
 
-/** Full Macro Risk OS Dashboard */
+/** Model contribution in the composite r* */
+export interface ModelContribution {
+  weight: number;
+  current_value: number;
+}
+
+/** Composite equilibrium rate breakdown */
+export interface EquilibriumData {
+  composite_rstar: number | null;
+  selic_star: number | null;
+  method: string;
+  model_contributions: Record<string, ModelContribution>;
+  rstar_fiscal?: number;
+  rstar_parity?: number;
+  rstar_market_implied?: number;
+  rstar_state_space?: number;
+  rstar_regime?: number;
+  fiscal_decomposition?: {
+    base: number;
+    fiscal: number;
+    sovereign: number;
+  };
+  acm_term_premium_5y?: number;
+  regime_weights?: Record<string, Record<string, number>>;
+}
+
+/** Full ARC Macro Dashboard */
 export interface MacroDashboard {
   // Core
   run_date: string;
@@ -91,6 +118,7 @@ export interface MacroDashboard {
   term_premium: number;
   selic_target: number;
   di_1y: number;
+  di_2y: number;
   di_5y: number;
   di_10y: number;
   ntnb_5y: number | null;
@@ -98,8 +126,21 @@ export interface MacroDashboard {
   ust_2y: number;
   ust_10y: number;
   
+  // Equilibrium
+  equilibrium?: EquilibriumData;
+  selic_star?: number;
+
   // Credit
   embi_spread: number;
+  cupom_360d?: number;
+  cupom_30d?: number;
+  cupom_cambial_360d?: number;
+  cupom_cambial_chg_1m?: number;
+  cupom_cambial_chg_3m?: number;
+  cip_basis?: number;
+  ntnb_5y_yield?: number;
+  ntnb_10y_yield?: number;
+  ipca_expectations?: number;
   vix: number;
   dxy: number;
   
@@ -107,8 +148,10 @@ export interface MacroDashboard {
   positions: {
     fx: AssetPosition;
     front: AssetPosition;
+    belly: AssetPosition;
     long: AssetPosition;
     hard: AssetPosition;
+    ntnb: AssetPosition;
   };
   
   // Model details
@@ -175,6 +218,95 @@ export interface MacroDashboard {
   beer_regression?: Record<string, unknown>;
   return_regression_6m?: Record<string, unknown>;
   return_regression_3m?: Record<string, unknown>;
+
+  // v4.4 Feature selection results (Elastic Net + Boruta + Stability)
+  feature_selection?: Record<string, {
+    instrument?: string;
+    total_features: number;
+    lasso: {
+      n_selected: number;
+      alpha: number;
+      l1_ratio?: number;
+      method?: string;
+      selected: string[];
+      rejected?: string[];
+      coefficients: Record<string, number>;
+      path?: {
+        alphas: number[];
+        coefficients: Record<string, number[]>;
+        selected_alpha: number;
+        n_alphas: number;
+      };
+    };
+    boruta: {
+      n_confirmed: number;
+      n_tentative: number;
+      n_rejected: number;
+      confirmed: string[];
+      tentative: string[];
+      rejected: string[];
+      n_iterations: number;
+    };
+    interactions?: {
+      tested: string[];
+      confirmed: string[];
+      rejected: string[];
+      n_tested: number;
+      n_confirmed: number;
+    };
+    stability?: {
+      n_subsamples: number;
+      subsample_ratio: number;
+      enet_frequency?: Record<string, number>;
+      lasso_frequency?: Record<string, number>;
+      boruta_frequency?: Record<string, number>;
+      composite_score?: Record<string, number>;
+      combined_frequency?: Record<string, number>;
+      classification: Record<string, string>;
+      thresholds?: { robust: number; moderate: number };
+    };
+    alerts?: Array<{
+      type: 'critical' | 'warning' | 'info';
+      feature: string;
+      instrument: string;
+      message: string;
+      previous?: string;
+      current?: string;
+      transition?: string;
+    }>;
+    feature_status?: Record<string, {
+      enet: boolean;
+      boruta: string;
+      stability: string;
+      composite_score: number;
+      final: boolean;
+    }>;
+    final: {
+      n_features: number;
+      features: string[];
+      reduction_pct: number;
+      method: string;
+    };
+  }>;
+  // v4.3 Temporal feature selection comparison
+  feature_selection_temporal?: {
+    changes: Array<{
+      instrument: string;
+      feature: string;
+      change_type: string;
+      from_status: string;
+      to_status: string;
+    }>;
+    summary: Record<string, {
+      total_features_tracked: number;
+      features_gained: string[];
+      features_lost: string[];
+      features_stable: string[];
+      structural_shift_score: number;
+    }>;
+    run_date: string;
+    previous_date: string;
+  };
 }
 
 export interface TimeSeriesPoint {
@@ -237,6 +369,19 @@ export interface ScorePoint {
   score_regime: number | null;
 }
 
+/** r* Equilibrium time series point */
+export interface RstarTsPoint {
+  date: string;
+  composite_rstar: number | null;
+  selic_star: number | null;
+  selic_actual: number | null;
+  rstar_fiscal: number | null;
+  rstar_parity: number | null;
+  rstar_market_implied: number | null;
+  rstar_state_space: number | null;
+  acm_term_premium: number | null;
+}
+
 export interface BacktestPoint {
   date: string;
   // v2 overlay-on-CDI
@@ -253,18 +398,21 @@ export interface BacktestPoint {
   belly_pnl: number;
   long_pnl: number;
   hard_pnl: number;
+  ntnb_pnl?: number;
   // Weights
   weight_fx: number;
   weight_front: number;
   weight_belly: number;
   weight_long: number;
   weight_hard: number;
+  weight_ntnb?: number;
   // Mu predictions
   mu_fx: number;
   mu_front: number;
   mu_belly: number;
   mu_long: number;
   mu_hard: number;
+  mu_ntnb?: number;
   // Regime
   P_carry: number;
   P_riskoff: number;
@@ -348,7 +496,7 @@ export interface BacktestData {
 }
 
 /**
- * Detect if dashboard data is from the new Macro Risk OS or legacy FX-only model
+ * Detect if dashboard data is from the new ARC Macro or legacy FX-only model
  */
 function isMacroRiskOS(d: Record<string, unknown>): boolean {
   return 'positions' in d && 'risk_metrics' in d;
@@ -363,13 +511,22 @@ export function useModelData() {
 
   const result = useMemo(() => {
     if (apiData?.source === 'database' && apiData.dashboard) {
+      // Merge DB dashboard with embedded feature_selection if DB doesn't have it
+      const dbDashboard = apiData.dashboard as Record<string, unknown>;
+      const mergedDashboard = {
+        ...dbDashboard,
+        // v4.3: Use DB feature_selection if available, otherwise fall back to embedded
+        feature_selection: dbDashboard.feature_selection || (featureSelectionData as unknown) || null,
+      } as unknown as MacroDashboard;
+
       return {
-        dashboard: apiData.dashboard as unknown as MacroDashboard,
+        dashboard: mergedDashboard,
         timeseries: (apiData.timeseries || []) as unknown as TimeSeriesPoint[],
         regimeProbs: (apiData.regime || []) as unknown as RegimePoint[],
         cyclicalFactors: (apiData.cyclical || []) as unknown as CyclicalPoint[],
         stateVariables: (apiData.stateVariables || []) as unknown as StateVarPoint[],
         score: (apiData.score || []) as unknown as ScorePoint[],
+        rstarTs: (((apiData.dashboard as any)?.rstar_ts?.length > 0 ? (apiData.dashboard as any).rstar_ts : rstarTsData) || []) as unknown as RstarTsPoint[],
         backtest: (apiData.backtest || null) as unknown as BacktestData | null,
         shapImportance: (apiData.shapImportance || null) as Record<string, Record<string, { mean_abs: number; current: number; rank: number }>> | null,
         shapHistory: (apiData.shapHistory || null) as Array<{ date: string; instrument: string; feature: string; importance: number }> | null,
@@ -381,17 +538,20 @@ export function useModelData() {
       };
     }
 
-    // Fallback to embedded data
+    // Fallback to embedded data (v4.0 with equilibrium features)
     return {
       dashboard: dashboardData as unknown as MacroDashboard,
       timeseries: timeseriesData as unknown as TimeSeriesPoint[],
       regimeProbs: regimeData as unknown as RegimePoint[],
       cyclicalFactors: cyclicalData as unknown as CyclicalPoint[],
-      stateVariables: [] as StateVarPoint[],
-      score: [] as ScorePoint[],
-      backtest: null as BacktestData | null,
-      shapImportance: null as Record<string, Record<string, { mean_abs: number; current: number; rank: number }>> | null,
-      shapHistory: null as Array<{ date: string; instrument: string; feature: string; importance: number }> | null,
+      stateVariables: (stateVariablesData || []) as unknown as StateVarPoint[],
+      score: (scoreData || []) as unknown as ScorePoint[],
+      rstarTs: (rstarTsData || []) as unknown as RstarTsPoint[],
+      backtest: (backtestData || null) as unknown as BacktestData | null,
+      shapImportance: (shapImportanceData || null) as unknown as Record<string, Record<string, { mean_abs: number; current: number; rank: number }>> | null,
+      shapHistory: (shapHistoryData || null) as unknown as Array<{ date: string; instrument: string; feature: string; importance: number }> | null,
+      feature_selection: (featureSelectionData || null) as unknown as MacroDashboard['feature_selection'],
+      feature_selection_temporal: (featureSelectionTemporalData || null) as unknown as MacroDashboard['feature_selection_temporal'],
       isMacroRiskOS: false,
       loading: false,
       error: null as string | null,
@@ -431,6 +591,75 @@ export function useRunModel() {
   return trpc.model.run.useMutation({
     onSuccess: () => {
       utils.model.invalidate();
+    },
+  });
+}
+
+// ============================================================
+// Pipeline Hooks
+// ============================================================
+
+/**
+ * Hook to get current pipeline execution status (polls every 3s when running)
+ */
+export function usePipelineStatus() {
+  const query = trpc.pipeline.status.useQuery(undefined, {
+    refetchInterval: (data) => {
+      // Poll fast when pipeline is running, slow otherwise
+      return data?.state?.data?.isRunning ? 3000 : 30000;
+    },
+  });
+  return query;
+}
+
+/**
+ * Hook to get the latest pipeline run
+ */
+export function useLatestPipelineRun() {
+  return trpc.pipeline.latest.useQuery();
+}
+
+/**
+ * Hook to get pipeline run history
+ */
+export function usePipelineHistory() {
+  return trpc.pipeline.history.useQuery();
+}
+
+/**
+ * Hook to trigger a full pipeline run
+ */
+export function useTriggerPipeline() {
+  const utils = trpc.useUtils();
+  return trpc.pipeline.trigger.useMutation({
+    onSuccess: () => {
+      utils.pipeline.invalidate();
+      utils.model.invalidate();
+    },
+  });
+}
+
+// ============================================================
+// DATA SOURCE HEALTH HOOKS
+// ============================================================
+
+/**
+ * Hook to get the latest data source health status (from DB, fast).
+ */
+export function useDataSourceHealth() {
+  return trpc.dataHealth.status.useQuery(undefined, {
+    refetchInterval: 60000, // Refresh every 60s
+  });
+}
+
+/**
+ * Hook to trigger a live health check on all data sources.
+ */
+export function useCheckDataSources() {
+  const utils = trpc.useUtils();
+  return trpc.dataHealth.check.useMutation({
+    onSuccess: () => {
+      utils.dataHealth.invalidate();
     },
   });
 }

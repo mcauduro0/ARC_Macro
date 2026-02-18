@@ -11,8 +11,10 @@ import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Bell, AlertTriangle, AlertCircle, Info, X, Check,
-  TrendingUp, BarChart3, Activity, ShieldAlert, Eye, EyeOff
+  TrendingUp, BarChart3, Activity, ShieldAlert, Eye, EyeOff,
+  ArrowRight, Scale,
 } from 'lucide-react';
+import { Link } from 'wouter';
 import { useState, useMemo } from 'react';
 import { useAuth } from '@/_core/hooks/useAuth';
 
@@ -73,6 +75,8 @@ const ALERT_TYPE_ICONS: Record<string, typeof Activity> = {
   drawdown_warning: ShieldAlert,
   model_degradation: AlertTriangle,
   data_quality: AlertCircle,
+  feature_stability: Activity,
+  rebalancing_deviation: Activity,
 };
 
 const ALERT_TYPE_LABELS: Record<string, string> = {
@@ -82,6 +86,8 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   drawdown_warning: 'Drawdown',
   model_degradation: 'Degradação',
   data_quality: 'Dados',
+  feature_stability: 'Estabilidade',
+  rebalancing_deviation: 'Rebalanceamento',
 };
 
 function timeAgo(dateStr: string): string {
@@ -183,6 +189,19 @@ function AlertCard({ alert, onMarkRead, onDismiss, isAuthenticated }: {
                   )}
                 </div>
               )}
+
+              {/* Actionable buttons for regime change and rebalancing alerts */}
+              {(alert.alertType === 'regime_change' || alert.alertType === 'rebalancing_deviation') && (
+                <div className="mt-2 flex items-center gap-2">
+                  <Link href="/portfolio?tab=rebalance">
+                    <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1 border-primary/30 text-primary hover:bg-primary/10">
+                      <Scale className="w-3 h-3" />
+                      Rebalancear Portfólio
+                      <ArrowRight className="w-3 h-3" />
+                    </Button>
+                  </Link>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -260,6 +279,15 @@ export function ModelAlertsPanel() {
     },
   });
 
+  const testNotification = trpc.alerts.testNotification.useMutation({
+    onSuccess: (data) => {
+      console.log('[Alerts] Test notification:', data.message);
+    },
+    onError: (err) => {
+      console.error('[Alerts] Test notification failed:', err.message);
+    },
+  });
+
   const [filterType, setFilterType] = useState<string | null>(null);
   const [filterSeverity, setFilterSeverity] = useState<string | null>(null);
 
@@ -324,6 +352,23 @@ export function ModelAlertsPanel() {
             )}
           </CardTitle>
           <div className="flex items-center gap-2">
+            {isAuthenticated && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-[10px]"
+                    onClick={() => testNotification.mutate()}
+                    disabled={testNotification.isPending}
+                  >
+                    <Bell className="w-3 h-3 mr-1" />
+                    {testNotification.isPending ? 'Enviando...' : 'Testar'}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Enviar notificação de teste via push</TooltipContent>
+              </Tooltip>
+            )}
             {isAuthenticated && filteredAlerts.length > 0 && (
               <Button
                 variant="ghost"

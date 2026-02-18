@@ -1,0 +1,16 @@
+Feature Selection Panel - NOW VISIBLE AND WORKING
+=================================================
+Screenshot: /home/ubuntu/screenshots/3000-iocmu1pncr5ki7l_2026-02-15_00-27-26_1373.webp
+
+Panel shows:
+- Title: "Feature Selection — LASSO + Boruta v4.3"
+- Tabs: Resumo, Hard, Front, Long, Belly, FX, Estabilidade, LASSO Path, Temporal
+- Summary cards: 78 Features Originais → 34 Features Retidas → -56% Redução → 5 Consenso LASSO∩Boruta
+- Table: Comparação por Instrumento with Total, LASSO, Boruta, Final, Redução columns
+  - Hard (CDS): 13 → 3 (-77%)
+  - Front (DI 1Y): 13 → 13 (-0%)
+  - Long (DI 10Y): 15 → 3 (-80%)
+  - Belly (DI 5Y): 17 → 5 (-71%)
+  - FX (USDBRL): 20 → 10 (-50%)
+
+Fix applied: Added fallback from embedded data when DB doesn't have feature_selection.

@@ -1,0 +1,7 @@
+Screenshot v4.1 findings:
+- Pipeline Diário section visible with "Executar Pipeline" button
+- Shows "Último run: running" with Manual badge - model is executing in background
+- "Saúde dos Data Sources" panel visible with "Verificar" button
+- Status bar shows USDBRL 5.2240, SCORE +2.09, LONG BRL (SHORT USD), RUNNING indicator
+- Pipeline history shows 4 recent manual runs
+- All UI elements rendering correctly

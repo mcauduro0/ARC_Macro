@@ -1,0 +1,27 @@
+{
+  "name": "ARC Macro — BRLUSD Dashboard",
+  "short_name": "ARC Macro",
+  "description": "Institutional FX Model Dashboard for BRLUSD with real-time macro risk analysis",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#06b6d4",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "https://files.manuscdn.com/user_upload_by_module/session_file/310519663121236345/oqLWdmutoCUWvZop.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://files.manuscdn.com/user_upload_by_module/session_file/310519663121236345/wWiTetCVdPYjOruO.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "business"],
+  "screenshots": [],
+  "prefer_related_applications": false
+}

@@ -1,0 +1,336 @@
+[
+  {
+    "date": "2026-02-28",
+    "timestamp": "2026-02-17T15:21:47.097063",
+    "instruments": {
+      "hard": {
+        "final_features": [
+          "Z_vix",
+          "Z_cds_br",
+          "Z_ewz"
+        ],
+        "n_features": 3,
+        "reduction_pct": 72.7,
+        "lasso_selected": [
+          "Z_vix",
+          "Z_cds_br",
+          "Z_ewz"
+        ],
+        "lasso_alpha": 0.000966,
+        "l1_ratio": 1.0,
+        "boruta_confirmed": [
+          "Z_ewz"
+        ],
+        "stability_classification": {
+          "Z_vix": "robust",
+          "Z_cds_br": "robust",
+          "Z_fiscal": "unstable",
+          "Z_dxy": "moderate",
+          "carry_hard": "moderate",
+          "Z_hy_spread": "unstable",
+          "Z_us_real_yield": "moderate",
+          "Z_ewz": "robust",
+          "Z_us_breakeven": "unstable",
+          "Z_rstar_composite": "moderate",
+          "rstar_regime_signal": "unstable"
+        },
+        "stability_composite_scores": {
+          "Z_vix": 0.396,
+          "Z_cds_br": 0.4864,
+          "Z_fiscal": 0.0741,
+          "Z_dxy": 0.1248,
+          "carry_hard": 0.1121,
+          "Z_hy_spread": 0.0958,
+          "Z_us_real_yield": 0.1874,
+          "Z_ewz": 1.0,
+          "Z_us_breakeven": 0.0914,
+          "Z_rstar_composite": 0.1262,
+          "rstar_regime_signal": 0.0575
+        },
+        "stability_thresholds": {
+          "robust": 0.2917,
+          "moderate": 0.1121
+        },
+        "interactions_confirmed": []
+      },
+      "front": {
+        "final_features": [
+          "Z_real_diff",
+          "Z_infl_surprise",
+          "Z_fiscal",
+          "carry_front",
+          "Z_term_premium",
+          "Z_us_real_yield",
+          "Z_pb_momentum",
+          "Z_policy_gap",
+          "Z_rstar_composite",
+          "Z_rstar_momentum",
+          "Z_selic_star_gap",
+          "rstar_regime_signal"
+        ],
+        "n_features": 12,
+        "reduction_pct": 0.0,
+        "lasso_selected": [
+          "carry_front"
+        ],
+        "lasso_alpha": 0.005626,
+        "l1_ratio": 0.1,
+        "boruta_confirmed": [],
+        "stability_classification": {
+          "Z_real_diff": "robust",
+          "Z_infl_surprise": "robust",
+          "Z_fiscal": "robust",
+          "carry_front": "robust",
+          "Z_term_premium": "moderate",
+          "Z_us_real_yield": "unstable",
+          "Z_pb_momentum": "moderate",
+          "Z_policy_gap": "moderate",
+          "Z_rstar_composite": "unstable",
+          "Z_rstar_momentum": "unstable",
+          "Z_selic_star_gap": "moderate",
+          "rstar_regime_signal": "unstable"
+        },
+        "stability_composite_scores": {
+          "Z_real_diff": 0.2206,
+          "Z_infl_surprise": 0.2335,
+          "Z_fiscal": 0.1799,
+          "carry_front": 0.514,
+          "Z_term_premium": 0.1603,
+          "Z_us_real_yield": 0.1394,
+          "Z_pb_momentum": 0.1592,
+          "Z_policy_gap": 0.1598,
+          "Z_rstar_composite": 0.1545,
+          "Z_rstar_momentum": 0.1474,
+          "Z_selic_star_gap": 0.1641,
+          "rstar_regime_signal": 0.0483
+        },
+        "stability_thresholds": {
+          "robust": 0.1751,
+          "moderate": 0.1585
+        },
+        "interactions_confirmed": []
+      },
+      "belly": {
+        "final_features": [
+          "Z_real_diff",
+          "Z_fiscal",
+          "Z_cds_br",
+          "Z_dxy",
+          "carry_belly",
+          "Z_term_premium",
+          "Z_tp_5y",
+          "Z_us_real_yield",
+          "Z_fiscal_premium",
+          "Z_us_breakeven",
+          "Z_policy_gap",
+          "Z_rstar_composite",
+          "Z_rstar_momentum",
+          "Z_selic_star_gap",
+          "rstar_regime_signal",
+          "Z_rstar_curve_gap"
+        ],
+        "n_features": 16,
+        "reduction_pct": 0.0,
+        "lasso_selected": [
+          "Z_fiscal_premium"
+        ],
+        "lasso_alpha": 0.003277,
+        "l1_ratio": 1.0,
+        "boruta_confirmed": [],
+        "stability_classification": {
+          "Z_real_diff": "moderate",
+          "Z_fiscal": "moderate",
+          "Z_cds_br": "robust",
+          "Z_dxy": "unstable",
+          "carry_belly": "robust",
+          "Z_term_premium": "unstable",
+          "Z_tp_5y": "unstable",
+          "Z_us_real_yield": "moderate",
+          "Z_fiscal_premium": "robust",
+          "Z_us_breakeven": "moderate",
+          "Z_policy_gap": "robust",
+          "Z_rstar_composite": "moderate",
+          "Z_rstar_momentum": "moderate",
+          "Z_selic_star_gap": "unstable",
+          "rstar_regime_signal": "unstable",
+          "Z_rstar_curve_gap": "unstable"
+        },
+        "stability_composite_scores": {
+          "Z_real_diff": 0.1146,
+          "Z_fiscal": 0.1196,
+          "Z_cds_br": 0.2545,
+          "Z_dxy": 0.0993,
+          "carry_belly": 0.1964,
+          "Z_term_premium": 0.08,
+          "Z_tp_5y": 0.0935,
+          "Z_us_real_yield": 0.1002,
+          "Z_fiscal_premium": 0.688,
+          "Z_us_breakeven": 0.1529,
+          "Z_policy_gap": 0.2673,
+          "Z_rstar_composite": 0.1368,
+          "Z_rstar_momentum": 0.1166,
+          "Z_selic_star_gap": 0.0847,
+          "rstar_regime_signal": 0.0599,
+          "Z_rstar_curve_gap": 0.0739
+        },
+        "stability_thresholds": {
+          "robust": 0.1638,
+          "moderate": 0.1002
+        },
+        "interactions_confirmed": []
+      },
+      "long": {
+        "final_features": [
+          "Z_fiscal",
+          "Z_dxy",
+          "Z_vix",
+          "Z_cds_br",
+          "carry_long",
+          "Z_term_premium",
+          "Z_fiscal_premium",
+          "Z_debt_accel",
+          "Z_us_real_yield",
+          "Z_policy_gap",
+          "Z_rstar_composite",
+          "Z_rstar_momentum",
+          "rstar_regime_signal",
+          "Z_rstar_curve_gap"
+        ],
+        "n_features": 14,
+        "reduction_pct": 0.0,
+        "lasso_selected": [
+          "Z_cds_br",
+          "Z_fiscal_premium"
+        ],
+        "lasso_alpha": 0.005034,
+        "l1_ratio": 1.0,
+        "boruta_confirmed": [
+          "Z_fiscal_premium"
+        ],
+        "stability_classification": {
+          "Z_fiscal": "moderate",
+          "Z_dxy": "unstable",
+          "Z_vix": "unstable",
+          "Z_cds_br": "robust",
+          "carry_long": "robust",
+          "Z_term_premium": "unstable",
+          "Z_fiscal_premium": "robust",
+          "Z_debt_accel": "unstable",
+          "Z_us_real_yield": "moderate",
+          "Z_policy_gap": "robust",
+          "Z_rstar_composite": "moderate",
+          "Z_rstar_momentum": "moderate",
+          "rstar_regime_signal": "unstable",
+          "Z_rstar_curve_gap": "unstable"
+        },
+        "stability_composite_scores": {
+          "Z_fiscal": 0.1046,
+          "Z_dxy": 0.1038,
+          "Z_vix": 0.0895,
+          "Z_cds_br": 0.3127,
+          "carry_long": 0.1878,
+          "Z_term_premium": 0.0951,
+          "Z_fiscal_premium": 0.724,
+          "Z_debt_accel": 0.0909,
+          "Z_us_real_yield": 0.1146,
+          "Z_policy_gap": 0.1598,
+          "Z_rstar_composite": 0.1095,
+          "Z_rstar_momentum": 0.1368,
+          "rstar_regime_signal": 0.049,
+          "Z_rstar_curve_gap": 0.0915
+        },
+        "stability_thresholds": {
+          "robust": 0.154,
+          "moderate": 0.104
+        },
+        "interactions_confirmed": []
+      },
+      "fx": {
+        "final_features": [
+          "Z_dxy",
+          "Z_vix",
+          "Z_cds_br",
+          "Z_real_diff",
+          "carry_fx",
+          "Z_beer",
+          "Z_ewz",
+          "Z_iron_ore",
+          "Z_bop",
+          "Z_policy_gap",
+          "IX_vix_x_cds",
+          "IX_policy_x_dxy"
+        ],
+        "n_features": 12,
+        "reduction_pct": 33.3,
+        "lasso_selected": [
+          "Z_dxy",
+          "Z_vix",
+          "Z_cds_br",
+          "Z_real_diff",
+          "carry_fx",
+          "Z_beer",
+          "Z_ewz",
+          "Z_iron_ore",
+          "Z_bop",
+          "Z_policy_gap",
+          "IX_vix_x_cds",
+          "IX_policy_x_dxy"
+        ],
+        "lasso_alpha": 0.001744,
+        "l1_ratio": 0.5,
+        "boruta_confirmed": [
+          "Z_vix",
+          "Z_ewz"
+        ],
+        "stability_classification": {
+          "Z_dxy": "moderate",
+          "Z_vix": "robust",
+          "Z_cds_br": "moderate",
+          "Z_real_diff": "unstable",
+          "Z_tot": "unstable",
+          "mu_fx_val": "unstable",
+          "carry_fx": "moderate",
+          "Z_cip_basis": "unstable",
+          "Z_beer": "robust",
+          "Z_reer_gap": "unstable",
+          "Z_hy_spread": "unstable",
+          "Z_ewz": "robust",
+          "Z_iron_ore": "moderate",
+          "Z_bop": "robust",
+          "Z_policy_gap": "robust",
+          "rstar_regime_signal": "unstable",
+          "IX_vix_x_cds": "moderate",
+          "IX_policy_x_dxy": "moderate"
+        },
+        "stability_composite_scores": {
+          "Z_dxy": 0.1342,
+          "Z_vix": 0.4173,
+          "Z_cds_br": 0.175,
+          "Z_real_diff": 0.0834,
+          "Z_tot": 0.0612,
+          "mu_fx_val": 0.0443,
+          "carry_fx": 0.1027,
+          "Z_cip_basis": 0.0488,
+          "Z_beer": 0.393,
+          "Z_reer_gap": 0.0197,
+          "Z_hy_spread": 0.0552,
+          "Z_ewz": 1.0,
+          "Z_iron_ore": 0.1475,
+          "Z_bop": 0.3489,
+          "Z_policy_gap": 0.4045,
+          "rstar_regime_signal": 0.0,
+          "IX_vix_x_cds": 0.1934,
+          "IX_policy_x_dxy": 0.1585
+        },
+        "stability_thresholds": {
+          "robust": 0.31,
+          "moderate": 0.0988
+        },
+        "interactions_confirmed": [
+          "IX_vix_x_cds",
+          "IX_policy_x_dxy"
+        ]
+      }
+    }
+  }
+]

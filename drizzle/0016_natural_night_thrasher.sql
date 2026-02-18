@@ -1,0 +1,1 @@
+ALTER TABLE `portfolio_pnl_daily` ADD `ntnbPnlBrl` double DEFAULT 0;

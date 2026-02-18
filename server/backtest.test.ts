@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 /**
- * ARC Macro Risk OS v2.2 — Comprehensive Backtest Tests
+ * ARC ARC Macro v2.2 — Comprehensive Backtest Tests
  * Covers: overlay-on-CDI framework, 5 instruments, ensemble (Ridge+GBM),
  * score demeaning, two-level regime (global + domestic), new institutional features
  * (CIP basis, BEER cointegration, REER gap, term premium, breakeven, fiscal premium),

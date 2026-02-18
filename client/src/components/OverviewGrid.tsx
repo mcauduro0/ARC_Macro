@@ -79,6 +79,17 @@ function DirectionBadge({ direction, er }: { direction: string; er: number }) {
   );
 }
 
+/** Returns card indicator class and title color based on Sharpe sign */
+function sharpeIndicator(sharpe: number | undefined | null): { indicatorClass: string; dotColor: string; titleColor: string } {
+  if (sharpe == null || sharpe === 0) {
+    return { indicatorClass: 'card-indicator-neutral', dotColor: 'bg-amber-400', titleColor: 'text-amber-400' };
+  }
+  if (sharpe > 0) {
+    return { indicatorClass: 'card-indicator-cyan', dotColor: 'bg-cyan-400', titleColor: 'text-primary' };
+  }
+  return { indicatorClass: 'card-indicator-bearish', dotColor: 'bg-rose-400', titleColor: 'text-rose-400' };
+}
+
 const cardVariants = {
   hidden: { opacity: 0, y: 20 },
   visible: (i: number) => ({
@@ -94,18 +105,25 @@ export function OverviewGrid({ dashboard: d }: Props) {
   const fmtNum = (v: number | undefined | null, dec = 2) => v != null ? v.toFixed(dec) : 'N/A';
   const misColor = (v: number | undefined | null) => v == null ? 'text-foreground' : v > 0 ? 'text-emerald-400' : v < 0 ? 'text-rose-400' : 'text-foreground';
 
+  const fxSharpe = sharpeIndicator(d.positions?.fx?.sharpe);
+  const frontSharpe = sharpeIndicator(d.positions?.front?.sharpe);
+  const bellySharpe = sharpeIndicator(d.positions?.belly?.sharpe);
+  const longSharpe = sharpeIndicator(d.positions?.long?.sharpe);
+  const ntnbSharpe = sharpeIndicator(d.positions?.ntnb?.sharpe);
+  const hardSharpe = sharpeIndicator(d.positions?.hard?.sharpe);
+
   return (
     <div className="space-y-4">
-      {/* Row 1: Cross-Asset Positions (Macro Risk OS) */}
+      {/* Row 1: Cross-Asset Positions (ARC Macro) — 5 cards */}
       {isMROS && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
           {/* FX Position */}
           <motion.div custom={0} variants={cardVariants} initial="hidden" animate="visible">
-            <Card className="card-indicator card-indicator-cyan h-full bg-card border-border/50">
+            <Card className={`card-indicator ${fxSharpe.indicatorClass} h-full bg-card border-border/50`}>
               <CardHeader className="pb-1">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-                  FX (USDBRL)
+                <CardTitle className={`text-xs font-semibold uppercase tracking-wider ${fxSharpe.titleColor} flex items-center gap-2`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${fxSharpe.dotColor}`} />
+                  DOL Futuro (Câmbio)
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-1">
@@ -118,7 +136,8 @@ export function OverviewGrid({ dashboard: d }: Props) {
                 <MetricRow label="PPP-BS" value={fmtNum(d.ppp_bs_fair)} tooltip="PPP ajustado por Balassa-Samuelson (β=0.35): corrige o viés de produtividade para EM" />
                 <MetricRow label="FEER" value={fmtNum(d.feer_fair)} tooltip="Fundamental Equilibrium ER: câmbio consistente com conta corrente sustentável (-2.0% PIB)" />
                 <MetricRow label="PPP Raw" value={fmtNum(d.ppp_fair)} tooltip="PPP conversion factor bruto (referência estrutural de longo prazo, não é fair value)" />
-                <MetricRow label="Sharpe" value={fmtNum(d.positions?.fx?.sharpe)} />
+                <MetricRow label="Sharpe" value={fmtNum(d.positions?.fx?.sharpe)} tooltip="Sharpe anualizado = μ_ann / σ_ann (rolling 36m)" />
+                <MetricRow label="Vol" value={`${fmtNum(d.positions?.fx?.annualized_vol)}%`} tooltip="Volatilidade anualizada (σ rolling 36m × √12)" />
                 <MetricRow label="Weight" value={fmtNum(d.positions?.fx?.weight, 3)} />
               </CardContent>
             </Card>
@@ -126,10 +145,10 @@ export function OverviewGrid({ dashboard: d }: Props) {
 
           {/* Front-End Rates */}
           <motion.div custom={1} variants={cardVariants} initial="hidden" animate="visible">
-            <Card className="card-indicator card-indicator-cyan h-full bg-card border-border/50">
+            <Card className={`card-indicator ${frontSharpe.indicatorClass} h-full bg-card border-border/50`}>
               <CardHeader className="pb-1">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                <CardTitle className={`text-xs font-semibold uppercase tracking-wider ${frontSharpe.titleColor} flex items-center gap-2`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${frontSharpe.dotColor}`} />
                   Front-End (DI 1Y)
                 </CardTitle>
               </CardHeader>
@@ -141,19 +160,45 @@ export function OverviewGrid({ dashboard: d }: Props) {
                 <MetricRow label="DI 1Y" value={`${fmtNum(d.di_1y)}%`} />
                 <MetricRow label="SELIC" value={`${fmtNum(d.selic_target)}%`} />
                 <MetricRow label="Fair Value" value={`${fmtNum(d.front_fair)}%`} tooltip="Front-end fair rate from model" />
-                <MetricRow label="Sharpe" value={fmtNum(d.positions?.front?.sharpe)} />
+                <MetricRow label="Sharpe" value={fmtNum(d.positions?.front?.sharpe)} tooltip="Sharpe anualizado = μ_ann / σ_ann (rolling 36m)" />
+                <MetricRow label="Vol" value={`${fmtNum(d.positions?.front?.annualized_vol)}%`} tooltip="Volatilidade anualizada (σ rolling 36m × √12)" />
                 <MetricRow label="Weight" value={fmtNum(d.positions?.front?.weight, 3)} />
                 <MetricRow label="Risk Unit" value={fmtNum(d.positions?.front?.risk_unit, 4)} />
               </CardContent>
             </Card>
           </motion.div>
 
-          {/* Long-End Rates */}
+          {/* Belly Rates (DI 2-3Y) */}
           <motion.div custom={2} variants={cardVariants} initial="hidden" animate="visible">
-            <Card className="card-indicator card-indicator-neutral h-full bg-card border-border/50">
+            <Card className={`card-indicator ${bellySharpe.indicatorClass} h-full bg-card border-border/50`}>
               <CardHeader className="pb-1">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-amber-400 flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                <CardTitle className={`text-xs font-semibold uppercase tracking-wider ${bellySharpe.titleColor} flex items-center gap-2`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${bellySharpe.dotColor}`} />
+                  Belly (DI 2-3Y)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                <DirectionBadge
+                  direction={d.positions?.belly?.direction || 'N/A'}
+                  er={d.positions?.belly?.expected_return_6m || 0}
+                />
+                <MetricRow label="DI 2Y" value={`${fmtNum(d.di_2y)}%`} />
+                <MetricRow label="DI 5Y" value={`${fmtNum(d.di_5y)}%`} />
+                <MetricRow label="Fair Value" value={`${fmtNum(d.belly_fair)}%`} tooltip="Belly fair rate from model (DI 5Y equilibrium)" />
+                <MetricRow label="Sharpe" value={fmtNum(d.positions?.belly?.sharpe)} tooltip="Sharpe anualizado = μ_ann / σ_ann (rolling 36m)" />
+                <MetricRow label="Vol" value={`${fmtNum(d.positions?.belly?.annualized_vol)}%`} tooltip="Volatilidade anualizada (σ rolling 36m × √12)" />
+                <MetricRow label="Weight" value={fmtNum(d.positions?.belly?.weight, 3)} />
+                <MetricRow label="Risk Unit" value={fmtNum(d.positions?.belly?.risk_unit, 4)} />
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* Long-End Rates */}
+          <motion.div custom={3} variants={cardVariants} initial="hidden" animate="visible">
+            <Card className={`card-indicator ${longSharpe.indicatorClass} h-full bg-card border-border/50`}>
+              <CardHeader className="pb-1">
+                <CardTitle className={`text-xs font-semibold uppercase tracking-wider ${longSharpe.titleColor} flex items-center gap-2`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${longSharpe.dotColor}`} />
                   Long-End (DI 5Y)
                 </CardTitle>
               </CardHeader>
@@ -164,21 +209,22 @@ export function OverviewGrid({ dashboard: d }: Props) {
                 />
                 <MetricRow label="DI 5Y" value={`${fmtNum(d.di_5y)}%`} />
                 <MetricRow label="DI 10Y" value={`${fmtNum(d.di_10y)}%`} />
-                <MetricRow label="Fair Value" value={`${fmtNum(d.long_fair)}%`} />
+                <MetricRow label="Fair Value" value={`${fmtNum(d.long_fair)}%`} tooltip="Long-end fair rate from model (DI 10Y equilibrium)" />
                 <MetricRow label="Term Premium" value={`${fmtNum(d.term_premium)}%`} />
-                <MetricRow label="Sharpe" value={fmtNum(d.positions?.long?.sharpe)} />
+                <MetricRow label="Sharpe" value={fmtNum(d.positions?.long?.sharpe)} tooltip="Sharpe anualizado = μ_ann / σ_ann (rolling 36m)" />
+                <MetricRow label="Vol" value={`${fmtNum(d.positions?.long?.annualized_vol)}%`} tooltip="Volatilidade anualizada (σ rolling 36m × √12)" />
                 <MetricRow label="Weight" value={fmtNum(d.positions?.long?.weight, 3)} />
               </CardContent>
             </Card>
           </motion.div>
 
-          {/* Hard Currency Sovereign */}
-          <motion.div custom={3} variants={cardVariants} initial="hidden" animate="visible">
-            <Card className="card-indicator h-full bg-card border-border/50 card-indicator-bearish">
+          {/* Cupom Cambial (DDI) Sovereign */}
+          <motion.div custom={4} variants={cardVariants} initial="hidden" animate="visible">
+            <Card className={`card-indicator ${hardSharpe.indicatorClass} h-full bg-card border-border/50`}>
               <CardHeader className="pb-1">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-                  Hard Currency
+                <CardTitle className={`text-xs font-semibold uppercase tracking-wider ${hardSharpe.titleColor} flex items-center gap-2`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${hardSharpe.dotColor}`} />
+                  Cupom Cambial (DDI)
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-1">
@@ -186,12 +232,38 @@ export function OverviewGrid({ dashboard: d }: Props) {
                   direction={d.positions?.hard?.direction || 'N/A'}
                   er={d.positions?.hard?.expected_return_6m || 0}
                 />
-                <MetricRow label="EMBI Spread" value={`${fmtNum(d.embi_spread, 0)} bps`} />
+                <MetricRow label="Cupom 360d" value={`${fmtNum(d.cupom_cambial_360d)}%`} />
+                <MetricRow label="CIP Basis" value={`${fmtNum(d.cip_basis)} bps`} />
                 <MetricRow label="UST 2Y" value={`${fmtNum(d.ust_2y)}%`} />
                 <MetricRow label="UST 10Y" value={`${fmtNum(d.ust_10y)}%`} />
-                <MetricRow label="Sharpe" value={fmtNum(d.positions?.hard?.sharpe)} />
+                <MetricRow label="Sharpe" value={fmtNum(d.positions?.hard?.sharpe)} tooltip="Sharpe anualizado = μ_ann / σ_ann (rolling 36m)" />
+                <MetricRow label="Vol" value={`${fmtNum(d.positions?.hard?.annualized_vol)}%`} tooltip="Volatilidade anualizada (σ rolling 36m × √12)" />
                 <MetricRow label="Weight" value={fmtNum(d.positions?.hard?.weight, 3)} />
                 <MetricRow label="Risk Unit" value={fmtNum(d.positions?.hard?.risk_unit, 4)} />
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* NTN-B (Cupom de Inflação) */}
+          <motion.div custom={5} variants={cardVariants} initial="hidden" animate="visible">
+            <Card className={`card-indicator ${ntnbSharpe.indicatorClass} h-full bg-card border-border/50`}>
+              <CardHeader className="pb-1">
+                <CardTitle className={`text-xs font-semibold uppercase tracking-wider ${ntnbSharpe.titleColor} flex items-center gap-2`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${ntnbSharpe.dotColor}`} />
+                  NTN-B (IPCA+)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                <DirectionBadge
+                  direction={d.positions?.ntnb?.direction || 'N/A'}
+                  er={d.positions?.ntnb?.expected_return_6m || 0}
+                />
+                <MetricRow label="Real Yield 5Y" value={`${fmtNum(d.ntnb_5y_yield)}%`} />
+                <MetricRow label="IPCA Exp" value={`${fmtNum(d.ipca_expectations)}%`} />
+                <MetricRow label="Sharpe" value={fmtNum(d.positions?.ntnb?.sharpe)} tooltip="Sharpe anualizado = μ_ann / σ_ann (rolling 36m)" />
+                <MetricRow label="Vol" value={`${fmtNum(d.positions?.ntnb?.annualized_vol)}%`} tooltip="Volatilidade anualizada (σ rolling 36m × √12)" />
+                <MetricRow label="Weight" value={fmtNum(d.positions?.ntnb?.weight, 3)} />
+                <MetricRow label="Risk Unit" value={fmtNum(d.positions?.ntnb?.risk_unit, 4)} />
               </CardContent>
             </Card>
           </motion.div>
@@ -201,7 +273,7 @@ export function OverviewGrid({ dashboard: d }: Props) {
       {/* Row 2: State Variables + Regime */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {/* State Variables X1-X7 */}
-        <motion.div custom={4} variants={cardVariants} initial="hidden" animate="visible" className="xl:col-span-2">
+        <motion.div custom={5} variants={cardVariants} initial="hidden" animate="visible" className="xl:col-span-2">
           <Card className="h-full bg-card border-border/50">
             <CardHeader className="pb-2">
               <CardTitle className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-2">
@@ -227,6 +299,13 @@ export function OverviewGrid({ dashboard: d }: Props) {
                       'X10_term_premium': 'Term Premium',
                       'X11_cip_basis': 'CIP Basis',
                       'X12_iron_ore': 'Iron Ore',
+                      // v4.0: Equilibrium-derived features
+                      'X13_policy_gap': 'Policy Gap (SELIC-SELIC*)',
+                      'X14_rstar_composite': 'r* Composto',
+                      'X15_rstar_momentum': 'r* Momentum (6m)',
+                      'X16_fiscal_component': 'Componente Fiscal r*',
+                      'X17_sovereign_component': 'Componente Soberano r*',
+                      'X18_selic_star_gap': 'DI1Y - SELIC*',
                     };
                     return (
                       <ZScoreBar key={key} value={v || 0} label={labels[key] || key.replace(/^X\d+_/, '')} />
@@ -250,7 +329,7 @@ export function OverviewGrid({ dashboard: d }: Props) {
         </motion.div>
 
         {/* Regime */}
-        <motion.div custom={5} variants={cardVariants} initial="hidden" animate="visible">
+        <motion.div custom={6} variants={cardVariants} initial="hidden" animate="visible">
           <Card className={`h-full bg-card border-border/50 card-indicator ${
             (d.current_regime || d.dominant_regime) === 'Carry' ? 'card-indicator-bullish' :
             (d.current_regime || d.dominant_regime) === 'StressDom' ? 'card-indicator-neutral' :

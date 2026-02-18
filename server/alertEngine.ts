@@ -10,6 +10,7 @@
 import { getDb } from "./db";
 import { modelAlerts, InsertModelAlert, modelChangelog, InsertModelChangelog, modelRuns } from "../drizzle/schema";
 import { desc, eq } from "drizzle-orm";
+import { notifyOwner } from "./_core/notification";
 
 // ============================================================
 // Types
@@ -79,6 +80,8 @@ export async function generatePostRunAlerts(currentRunId: number): Promise<{
     candidates.push(...detectShapShifts(current, previous));
     candidates.push(...detectScoreChange(current, previous));
     candidates.push(...detectDrawdownWarning(current));
+    candidates.push(...detectFeatureStabilityChanges(current, previous));
+    candidates.push(...detectRebalancingDeviation(current, previous));
 
     // Insert alerts
     for (const alert of candidates) {
@@ -92,6 +95,10 @@ export async function generatePostRunAlerts(currentRunId: number): Promise<{
     const changelogCreated = await generateChangelogEntry(db, current, previous, currentRunId);
 
     console.log(`[AlertEngine] Generated ${candidates.length} alerts, changelog: ${changelogCreated}`);
+
+    // Send push notifications for critical/warning alerts
+    await sendPushNotifications(candidates, current);
+
     return { alerts: candidates.length, changelog: changelogCreated };
   } catch (error) {
     console.error("[AlertEngine] Error generating alerts:", error);
@@ -137,9 +144,9 @@ function detectRegimeChange(current: ModelRunData, previous: ModelRunData | null
   const prevProbs = prevDash.regime_probabilities as Record<string, number> | undefined;
 
   if (curProbs && prevProbs) {
-    const stressKey = "P_StressDom";
-    const curStress = curProbs[stressKey] || 0;
-    const prevStress = prevProbs[stressKey] || 0;
+    // Dashboard JSON uses lowercase keys: P_stress (not P_StressDom)
+    const curStress = curProbs.P_stress ?? curProbs.P_StressDom ?? 0;
+    const prevStress = prevProbs.P_stress ?? prevProbs.P_StressDom ?? 0;
     const stressDelta = curStress - prevStress;
 
     if (stressDelta > 0.15 && curRegime === prevRegime) {
@@ -162,10 +169,18 @@ function formatRegime(regime: string): string {
   const map: Record<string, string> = {
     carry: "Carry",
     riskoff: "Risk-Off",
+    stress: "Stress",
     stress_dom: "Stress Doméstico",
+    domestic_stress: "Stress Doméstico",
+    domestic_calm: "Doméstico Calmo",
     P_Carry: "Carry",
+    P_carry: "Carry",
     P_RiskOff: "Risk-Off",
+    P_riskoff: "Risk-Off",
     P_StressDom: "Stress Doméstico",
+    P_stress: "Stress",
+    P_domestic_stress: "Stress Doméstico",
+    P_domestic_calm: "Doméstico Calmo",
   };
   return map[regime] || regime;
 }
@@ -179,7 +194,12 @@ function buildRegimeMessage(
   const curProbs = curDash.regime_probabilities as Record<string, number> | undefined;
   let probStr = "";
   if (curProbs) {
-    probStr = ` Probabilidades atuais: Carry ${((curProbs.P_Carry || 0) * 100).toFixed(0)}%, Risk-Off ${((curProbs.P_RiskOff || 0) * 100).toFixed(0)}%, Stress ${((curProbs.P_StressDom || 0) * 100).toFixed(0)}%.`;
+    // Dashboard JSON uses lowercase keys: P_carry, P_riskoff, P_stress
+    // (different from regime timeseries which uses P_Carry, P_RiskOff, P_StressDom)
+    const pCarry = curProbs.P_carry ?? curProbs.P_Carry ?? 0;
+    const pRiskoff = curProbs.P_riskoff ?? curProbs.P_RiskOff ?? 0;
+    const pStress = curProbs.P_stress ?? curProbs.P_StressDom ?? 0;
+    probStr = ` Probabilidades atuais: Carry ${(pCarry * 100).toFixed(1)}%, Risk-Off ${(pRiskoff * 100).toFixed(1)}%, Stress ${(pStress * 100).toFixed(1)}%.`;
   }
 
   const implications: Record<string, string> = {
@@ -358,6 +378,206 @@ function detectDrawdownWarning(current: ModelRunData): AlertCandidate[] {
 }
 
 // ============================================================
+// Feature Stability Change Detection (v4.5)
+// ============================================================
+
+function detectFeatureStabilityChanges(
+  current: ModelRunData,
+  previous: ModelRunData | null
+): AlertCandidate[] {
+  if (!previous) return [];
+
+  const alerts: AlertCandidate[] = [];
+
+  // Extract feature_selection data from dashboardJson
+  const curDash = current.dashboardJson;
+  const prevDash = previous.dashboardJson;
+
+  const curFS = curDash.feature_selection as Record<string, unknown> | undefined;
+  const prevFS = prevDash.feature_selection as Record<string, unknown> | undefined;
+
+  if (!curFS || !prevFS) return alerts;
+
+  const curInstruments = (curFS.per_instrument || curFS) as Record<string, Record<string, unknown>>;
+  const prevInstruments = (prevFS.per_instrument || prevFS) as Record<string, Record<string, unknown>>;
+
+  for (const [inst, curData] of Object.entries(curInstruments)) {
+    if (!curData || typeof curData !== 'object') continue;
+    const prevData = prevInstruments[inst];
+    if (!prevData || typeof prevData !== 'object') continue;
+
+    const curStability = curData.stability as Record<string, unknown> | undefined;
+    const prevStability = prevData.stability as Record<string, unknown> | undefined;
+    if (!curStability || !prevStability) continue;
+
+    const curClassification = curStability.classification as Record<string, string> | undefined;
+    const prevClassification = prevStability.classification as Record<string, string> | undefined;
+    if (!curClassification || !prevClassification) continue;
+
+    for (const [feature, curClass] of Object.entries(curClassification)) {
+      const prevClass = prevClassification[feature];
+      if (!prevClass || prevClass === curClass) continue;
+
+      // Robust → Unstable = critical
+      if (prevClass === 'robust' && curClass === 'unstable') {
+        alerts.push({
+          alertType: 'feature_stability',
+          severity: 'critical',
+          title: `Feature Instability: ${feature} (${inst.toUpperCase()})`,
+          message: `Feature "${feature}" no instrumento ${inst.toUpperCase()} caiu de Robust para Unstable entre runs consecutivos. Isso pode indicar uma mudança de regime ou quebra estrutural no driver.`,
+          previousValue: prevClass,
+          currentValue: curClass,
+          instrument: inst,
+          feature,
+          detailsJson: {
+            transition: `${prevClass} → ${curClass}`,
+            prev_composite: (prevStability.composite_scores as Record<string, number>)?.[feature],
+            curr_composite: (curStability.composite_scores as Record<string, number>)?.[feature],
+          },
+        });
+      }
+      // Robust → Moderate = warning
+      else if (prevClass === 'robust' && curClass === 'moderate') {
+        alerts.push({
+          alertType: 'feature_stability',
+          severity: 'warning',
+          title: `Feature Weakening: ${feature} (${inst.toUpperCase()})`,
+          message: `Feature "${feature}" no instrumento ${inst.toUpperCase()} enfraqueceu de Robust para Moderate. Monitorar de perto — pode indicar perda de poder preditivo.`,
+          previousValue: prevClass,
+          currentValue: curClass,
+          instrument: inst,
+          feature,
+        });
+      }
+      // Unstable → Robust = positive signal
+      else if (prevClass === 'unstable' && curClass === 'robust') {
+        alerts.push({
+          alertType: 'feature_stability',
+          severity: 'info',
+          title: `Feature Strengthening: ${feature} (${inst.toUpperCase()})`,
+          message: `Feature "${feature}" no instrumento ${inst.toUpperCase()} fortaleceu de Unstable para Robust. Novo sinal emergente — considerar aumento de peso no ensemble.`,
+          previousValue: prevClass,
+          currentValue: curClass,
+          instrument: inst,
+          feature,
+        });
+      }
+    }
+  }
+
+  return alerts;
+}
+
+// ============================================================
+// Rebalancing Deviation Detection
+// ============================================================
+
+/**
+ * Detect when current portfolio weights deviate significantly from model targets.
+ * Triggers when any instrument's weight differs from target by more than the threshold.
+ * Also detects when total portfolio risk exceeds configured limits.
+ */
+function detectRebalancingDeviation(
+  current: ModelRunData,
+  previous: ModelRunData | null
+): AlertCandidate[] {
+  const alerts: AlertCandidate[] = [];
+  const dash = current.dashboardJson;
+  const positions = dash.positions as Record<string, { weight: number }> | undefined;
+  const mu = dash.mu as Record<string, number> | undefined;
+
+  if (!positions || !mu) return alerts;
+
+  // Check weight deviation from model target
+  const WEIGHT_DEVIATION_THRESHOLD = 0.10; // 10% absolute deviation
+  const instruments = ['fx', 'front', 'belly', 'long', 'hard', 'ntnb'];
+
+  let totalAbsWeight = 0;
+  let totalDeviation = 0;
+  const deviations: Array<{ inst: string; current: number; target: number; delta: number }> = [];
+
+  for (const inst of instruments) {
+    const currentWeight = positions[inst]?.weight || 0;
+    totalAbsWeight += Math.abs(currentWeight);
+
+    // If we have previous run, compare weight changes
+    if (previous) {
+      const prevPositions = previous.dashboardJson.positions as Record<string, { weight: number }> | undefined;
+      const prevWeight = prevPositions?.[inst]?.weight || 0;
+      const delta = Math.abs(currentWeight - prevWeight);
+      totalDeviation += delta;
+
+      if (delta > WEIGHT_DEVIATION_THRESHOLD) {
+        deviations.push({
+          inst,
+          current: currentWeight,
+          target: prevWeight,
+          delta,
+        });
+      }
+    }
+  }
+
+  // Alert if significant rebalancing is needed
+  if (deviations.length > 0) {
+    const severity = deviations.some(d => d.delta > 0.20) ? 'warning' as const : 'info' as const;
+    const details = deviations.map(d =>
+      `${d.inst.toUpperCase()}: ${(d.target * 100).toFixed(1)}% → ${(d.current * 100).toFixed(1)}% (Δ${(d.delta * 100).toFixed(1)}pp)`
+    ).join(', ');
+
+    alerts.push({
+      alertType: 'rebalancing_deviation',
+      severity,
+      title: `Rebalancing Needed: ${deviations.length} instrument(s) deviated >${(WEIGHT_DEVIATION_THRESHOLD * 100).toFixed(0)}pp`,
+      message: `${deviations.length} instrumento(s) com desvio significativo do target anterior: ${details}. Turnover total: ${(totalDeviation * 100).toFixed(1)}pp.`,
+      currentValue: `${deviations.length} instruments`,
+      threshold: WEIGHT_DEVIATION_THRESHOLD,
+      detailsJson: {
+        deviations,
+        total_turnover: totalDeviation,
+        total_abs_weight: totalAbsWeight,
+      },
+    });
+  }
+
+  // Alert if total portfolio leverage is excessive
+  const MAX_LEVERAGE = 2.0; // 200% gross exposure
+  if (totalAbsWeight > MAX_LEVERAGE) {
+    alerts.push({
+      alertType: 'rebalancing_deviation',
+      severity: 'critical',
+      title: `Leverage Alert: ${(totalAbsWeight * 100).toFixed(0)}% gross exposure`,
+      message: `A exposição bruta do portfólio atingiu ${(totalAbsWeight * 100).toFixed(0)}%, acima do limite de ${(MAX_LEVERAGE * 100).toFixed(0)}%. Considerar redução de posições.`,
+      currentValue: `${(totalAbsWeight * 100).toFixed(0)}%`,
+      threshold: MAX_LEVERAGE,
+    });
+  }
+
+  // Alert if model mu signals are conflicting with current positions
+  for (const inst of instruments) {
+    const weight = positions[inst]?.weight || 0;
+    const muVal = mu[inst] || 0;
+
+    // Position is opposite to model signal
+    if (Math.abs(weight) > 0.05 && Math.abs(muVal) > 0.005) {
+      if ((weight > 0 && muVal < -0.01) || (weight < 0 && muVal > 0.01)) {
+        alerts.push({
+          alertType: 'rebalancing_deviation',
+          severity: 'warning',
+          title: `Signal Conflict: ${inst.toUpperCase()} position vs model`,
+          message: `Posição em ${inst.toUpperCase()} (${(weight * 100).toFixed(1)}%) está na direção oposta ao sinal do modelo (μ=${(muVal * 100).toFixed(2)}%). Considerar rebalanceamento.`,
+          previousValue: `weight=${(weight * 100).toFixed(1)}%`,
+          currentValue: `mu=${(muVal * 100).toFixed(2)}%`,
+          instrument: inst,
+        });
+      }
+    }
+  }
+
+  return alerts;
+}
+
+// ============================================================
 // Changelog Generation
 // ============================================================
 
@@ -397,7 +617,7 @@ async function generateChangelogEntry(
       // Position changes
       const prevPositions = prevDash.positions as Record<string, { weight: number }> | undefined;
       if (positions && prevPositions) {
-        for (const inst of ["fx", "front", "belly", "long", "hard"]) {
+        for (const inst of ["fx", "front", "belly", "long", "hard", "ntnb"]) {
           const curW = positions[inst]?.weight || 0;
           const prevW = prevPositions[inst]?.weight || 0;
           const delta = curW - prevW;
@@ -426,9 +646,10 @@ async function generateChangelogEntry(
       runDate: current.runDate,
       score: dash.score_total as number || null,
       regime: dash.current_regime as string || null,
-      regimeCarryProb: regimeProbs?.P_Carry || null,
-      regimeRiskoffProb: regimeProbs?.P_RiskOff || null,
-      regimeStressProb: regimeProbs?.P_StressDom || null,
+      // Dashboard JSON uses lowercase keys: P_carry, P_riskoff, P_stress
+      regimeCarryProb: regimeProbs?.P_carry ?? regimeProbs?.P_Carry ?? null,
+      regimeRiskoffProb: regimeProbs?.P_riskoff ?? regimeProbs?.P_RiskOff ?? null,
+      regimeStressProb: regimeProbs?.P_stress ?? regimeProbs?.P_StressDom ?? null,
       backtestSharpe: overlay?.sharpe || null,
       backtestReturn: overlay?.total_return || null,
       backtestMaxDD: overlay?.max_drawdown || null,
@@ -439,6 +660,7 @@ async function generateChangelogEntry(
       weightBelly: positions?.belly?.weight || null,
       weightLong: positions?.long?.weight || null,
       weightHard: positions?.hard?.weight || null,
+      weightNtnb: positions?.ntnb?.weight || null,
       trainingWindow: 36,
       nStressScenarios: Object.keys((dash.stress_tests as Record<string, unknown>) || {}).length || null,
       changesJson: changes,
@@ -456,6 +678,150 @@ async function generateChangelogEntry(
   } catch (error) {
     console.error("[AlertEngine] Error generating changelog:", error);
     return false;
+  }
+}
+
+// ============================================================
+// Push Notifications
+// ============================================================
+
+/**
+ * Send push notifications to the project owner for critical/warning alerts.
+ * Triggers on: regime changes, drawdown > -5%, score reversals, SHAP shifts.
+ * Also sends a summary notification after each model run.
+ */
+async function sendPushNotifications(
+  candidates: AlertCandidate[],
+  current: ModelRunData
+): Promise<void> {
+  try {
+    // 1. Regime change notification (with rebalancing recommendation)
+    const regimeAlerts = candidates.filter(a => a.alertType === 'regime_change' && a.severity !== 'info');
+    for (const alert of regimeAlerts) {
+      const rebalMsg = alert.severity === 'critical'
+        ? '\n\n🔄 AÇÃO REQUERIDA: Rebalanceamento do portfólio recomendado. Acesse a aba "Rebalancear" no Portfolio Management para revisar as ordens de execução e custos de transação estimados.'
+        : '\n\n📋 Monitorar portfólio. Verifique a aba "Rebalancear" para avaliar se ajustes são necessários.';
+      await notifyOwner({
+        title: `⚠️ ${alert.title}`,
+        content: alert.message + rebalMsg,
+      });
+      console.log(`[AlertEngine] Push notification sent: ${alert.title}`);
+    }
+
+    // 2. Drawdown warning notification (threshold: -5%)
+    const backtest = current.backtestJson as { summary?: Record<string, unknown> } | null;
+    const overlay = backtest?.summary?.overlay as Record<string, number> | undefined;
+    const maxDD = overlay?.max_drawdown;
+    if (maxDD !== undefined && maxDD < -5) {
+      const ddAlert = candidates.find(a => a.alertType === 'drawdown_warning');
+      if (ddAlert) {
+        await notifyOwner({
+          title: `📉 Drawdown Alert: ${maxDD.toFixed(1)}%`,
+          content: ddAlert.message,
+        });
+        console.log(`[AlertEngine] Push notification sent: Drawdown ${maxDD.toFixed(1)}%`);
+      } else {
+        // Even if no formal alert was generated (threshold was -10%), notify at -5%
+        await notifyOwner({
+          title: `📉 Drawdown Warning: ${maxDD.toFixed(1)}%`,
+          content: `O max drawdown do overlay atingiu ${maxDD.toFixed(1)}%. Monitorar de perto.`,
+        });
+        console.log(`[AlertEngine] Push notification sent: Drawdown warning ${maxDD.toFixed(1)}%`);
+      }
+    }
+
+    // 3. Score direction reversal notification
+    const reversalAlerts = candidates.filter(
+      a => a.alertType === 'score_change' && a.title.includes('Direction Reversal')
+    );
+    for (const alert of reversalAlerts) {
+      await notifyOwner({
+        title: `🔄 ${alert.title}`,
+        content: alert.message,
+      });
+      console.log(`[AlertEngine] Push notification sent: ${alert.title}`);
+    }
+
+    // 4. SHAP feature importance surge notification
+    const shapAlerts = candidates.filter(
+      a => a.alertType === 'shap_shift' && a.severity === 'warning'
+    );
+    for (const alert of shapAlerts) {
+      await notifyOwner({
+        title: `📊 ${alert.title}`,
+        content: alert.message,
+      });
+      console.log(`[AlertEngine] Push notification sent: ${alert.title}`);
+    }
+
+    // 5. Feature stability change notifications (v4.5)
+    const stabilityAlerts = candidates.filter(
+      a => a.alertType === 'feature_stability' && (a.severity === 'critical' || a.severity === 'warning')
+    );
+    if (stabilityAlerts.length > 0) {
+      // Group by severity for a consolidated notification
+      const critical = stabilityAlerts.filter(a => a.severity === 'critical');
+      const warnings = stabilityAlerts.filter(a => a.severity === 'warning');
+
+      if (critical.length > 0) {
+        const details = critical.map(a =>
+          `• ${a.feature} (${a.instrument?.toUpperCase()}): ${a.previousValue} → ${a.currentValue}`
+        ).join('\n');
+        await notifyOwner({
+          title: `🚨 Feature Instability Alert: ${critical.length} feature(s) Robust→Unstable`,
+          content: `${critical.length} feature(s) caíram de Robust para Unstable — possível mudança de regime:\n${details}`,
+        });
+        console.log(`[AlertEngine] Push: ${critical.length} critical stability alerts`);
+      }
+
+      if (warnings.length > 0) {
+        const details = warnings.map(a =>
+          `• ${a.feature} (${a.instrument?.toUpperCase()}): ${a.previousValue} → ${a.currentValue}`
+        ).join('\n');
+        await notifyOwner({
+          title: `⚠️ Feature Weakening: ${warnings.length} feature(s) Robust→Moderate`,
+          content: `${warnings.length} feature(s) enfraqueceram de Robust para Moderate:\n${details}`,
+        });
+        console.log(`[AlertEngine] Push: ${warnings.length} stability warning alerts`);
+      }
+    }
+
+    // 6. Rebalancing deviation notifications
+    const rebalAlerts = candidates.filter(
+      a => a.alertType === 'rebalancing_deviation' && (a.severity === 'critical' || a.severity === 'warning')
+    );
+    for (const alert of rebalAlerts) {
+      const icon = alert.severity === 'critical' ? '🚨' : '⚠️';
+      await notifyOwner({
+        title: `${icon} ${alert.title}`,
+        content: alert.message,
+      });
+      console.log(`[AlertEngine] Push notification sent: ${alert.title}`);
+    }
+
+    // 7. Model run completion summary (always send)
+    const dash = current.dashboardJson;
+    const spot = (dash.current_spot as number)?.toFixed(4) || 'N/A';
+    const score = (dash.score_total as number)?.toFixed(2) || 'N/A';
+    const regime = formatRegime((dash.current_regime as string) || 'unknown');
+    const direction = (dash.direction as string) || 'N/A';
+    const sharpe = overlay?.sharpe?.toFixed(2) || 'N/A';
+    const nAlerts = candidates.length;
+
+    await notifyOwner({
+      title: `ARC Macro — Model Update: ${current.runDate}`,
+      content: [
+        `Spot: ${spot} | Score: ${score} | Direction: ${direction}`,
+        `Regime: ${regime} | Sharpe: ${sharpe}`,
+        maxDD !== undefined ? `Max DD: ${maxDD.toFixed(1)}%` : '',
+        nAlerts > 0 ? `${nAlerts} alerta(s) gerado(s)` : 'Sem alertas',
+      ].filter(Boolean).join('\n'),
+    });
+    console.log(`[AlertEngine] Model run summary notification sent`);
+
+  } catch (error) {
+    // Non-fatal: log but don't fail the alert pipeline
+    console.warn('[AlertEngine] Push notification error (non-fatal):', error);
   }
 }
 

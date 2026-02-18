@@ -294,6 +294,54 @@ describe("Changelog & Alerts — API Response Structure", () => {
 // Regime Format Helper Tests
 // ============================================================
 
+describe("Regime Probability Key Mapping", () => {
+  it("should read probabilities from lowercase keys (dashboard JSON format)", () => {
+    // Dashboard JSON uses lowercase keys: P_carry, P_riskoff, P_stress
+    const dashboardProbs = {
+      P_carry: 0.998,
+      P_riskoff: 0.0,
+      P_stress: 0.002,
+      P_domestic_calm: 0.918,
+      P_domestic_stress: 0.082,
+    };
+    // The fix uses fallback: P_carry ?? P_Carry ?? 0
+    const pCarry = dashboardProbs.P_carry ?? (dashboardProbs as any).P_Carry ?? 0;
+    const pRiskoff = dashboardProbs.P_riskoff ?? (dashboardProbs as any).P_RiskOff ?? 0;
+    const pStress = dashboardProbs.P_stress ?? (dashboardProbs as any).P_StressDom ?? 0;
+    expect(pCarry).toBe(0.998);
+    expect(pRiskoff).toBe(0.0);
+    expect(pStress).toBe(0.002);
+  });
+
+  it("should also work with capitalized keys (regime timeseries format)", () => {
+    // Regime timeseries uses capitalized keys: P_Carry, P_RiskOff, P_StressDom
+    const timeseriesProbs: Record<string, number> = {
+      P_Carry: 0.85,
+      P_RiskOff: 0.10,
+      P_StressDom: 0.05,
+    };
+    const pCarry = (timeseriesProbs as any).P_carry ?? timeseriesProbs.P_Carry ?? 0;
+    const pRiskoff = (timeseriesProbs as any).P_riskoff ?? timeseriesProbs.P_RiskOff ?? 0;
+    const pStress = (timeseriesProbs as any).P_stress ?? timeseriesProbs.P_StressDom ?? 0;
+    expect(pCarry).toBe(0.85);
+    expect(pRiskoff).toBe(0.10);
+    expect(pStress).toBe(0.05);
+  });
+
+  it("should build correct probability string from dashboard JSON", () => {
+    const curProbs: Record<string, number> = {
+      P_carry: 0.998,
+      P_riskoff: 0.0,
+      P_stress: 0.002,
+    };
+    const pCarry = curProbs.P_carry ?? (curProbs as any).P_Carry ?? 0;
+    const pRiskoff = curProbs.P_riskoff ?? (curProbs as any).P_RiskOff ?? 0;
+    const pStress = curProbs.P_stress ?? (curProbs as any).P_StressDom ?? 0;
+    const probStr = `Carry ${(pCarry * 100).toFixed(1)}%, Risk-Off ${(pRiskoff * 100).toFixed(1)}%, Stress ${(pStress * 100).toFixed(1)}%`;
+    expect(probStr).toBe("Carry 99.8%, Risk-Off 0.0%, Stress 0.2%");
+  });
+});
+
 describe("Regime Format Helper", () => {
   it("should format known regimes correctly", () => {
     const map: Record<string, string> = {

@@ -1,4 +1,4 @@
-import { TimeSeriesPoint, RegimePoint, CyclicalPoint, StateVarPoint, ScorePoint } from '@/hooks/useModelData';
+import { TimeSeriesPoint, RegimePoint, CyclicalPoint, StateVarPoint, ScorePoint, RstarTsPoint } from '@/hooks/useModelData';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
@@ -13,6 +13,7 @@ interface Props {
   cyclicalFactors: CyclicalPoint[];
   stateVariables?: StateVarPoint[];
   score?: ScorePoint[];
+  rstarTs?: RstarTsPoint[];
 }
 
 const COLORS = {
@@ -30,6 +31,13 @@ const COLORS = {
   z_x5: '#a78bfa',    // Dólar Global
   z_x6: '#fbbf24',    // Risk Global
   z_x7: '#818cf8',    // Hiato
+  // v4.0: Equilibrium-derived Z-scores
+  z_x13: '#22d3ee',   // Policy Gap (SELIC-SELIC*)
+  z_x14: '#e879f9',   // r* Composite
+  z_x15: '#4ade80',   // r* Momentum
+  z_x16: '#f97316',   // Fiscal Component
+  z_x17: '#ef4444',   // Sovereign Component
+  z_x18: '#38bdf8',   // SELIC* Gap
   // Regime
   carry: '#34d399',
   riskoff: '#f43f5e',
@@ -48,6 +56,13 @@ const COLORS = {
   score_structural: '#a78bfa',  // Purple - structural (FV misalignment)
   score_cyclical: '#34d399',    // Green - cyclical (Z-scores)
   score_regime: '#f59e0b',      // Amber - regime adjustment
+  // Instruments
+  inst_fx: '#06b6d4',       // Cyan - FX
+  inst_front: '#a78bfa',    // Purple - Front-End
+  inst_belly: '#f59e0b',    // Amber - Belly
+  inst_long: '#34d399',     // Green - Long-End
+  inst_hard: '#f472b6',     // Pink - Cupom Cambial (DDI)
+  inst_ntnb: '#fbbf24',     // Amber - NTN-B
   // Grid
   grid: 'rgba(255,255,255,0.05)',
   text: 'rgba(255,255,255,0.5)',
@@ -72,7 +87,7 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 type TimeRange = '5Y' | '10Y' | 'ALL';
-type TabValue = 'fairvalue' | 'zscores' | 'regime' | 'cyclical' | 'score';
+type TabValue = 'fairvalue' | 'rstar' | 'zscores' | 'regime' | 'cyclical' | 'score' | 'weights' | 'mu';
 
 function filterByRange<T extends { date: string }>(data: T[], range: TimeRange): T[] {
   if (range === 'ALL') return data;
@@ -82,13 +97,16 @@ function filterByRange<T extends { date: string }>(data: T[], range: TimeRange):
   return data.filter(d => new Date(d.date) >= cutoff);
 }
 
-export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateVariables = [], score = [] }: Props) {
+export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateVariables = [], score = [], rstarTs = [] }: Props) {
   const [timeRange, setTimeRange] = useState<TimeRange>('10Y');
   const [activeTab, setActiveTab] = useState<TabValue>('fairvalue');
 
   const Z_FIELDS = [
     'Z_X1_diferencial_real', 'Z_X2_surpresa_inflacao', 'Z_X3_fiscal_risk',
-    'Z_X4_termos_de_troca', 'Z_X5_dolar_global', 'Z_X6_risk_global', 'Z_X7_hiato'
+    'Z_X4_termos_de_troca', 'Z_X5_dolar_global', 'Z_X6_risk_global', 'Z_X7_hiato',
+    // v4.0: Equilibrium-derived Z-scores
+    'Z_X13_policy_gap', 'Z_X14_rstar_composite', 'Z_X15_rstar_momentum',
+    'Z_X16_fiscal_component', 'Z_X17_sovereign_component', 'Z_X18_selic_star_gap'
   ] as const;
 
   // Normalize data: ensure every point has all Z-score keys (even if null)
@@ -120,12 +138,27 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
     return d.slice(0, 7);
   };
 
+  const [rstarSubView, setRstarSubView] = useState<'real' | 'selic' | 'gap'>('real');
+
+  const filteredRstar = useMemo(() => {
+    const filtered = filterByRange(rstarTs, timeRange);
+    return filtered.map(pt => ({
+      ...pt,
+      policy_gap: (pt.selic_actual != null && pt.selic_star != null) ? pt.selic_actual - pt.selic_star : null,
+    }));
+  }, [rstarTs, timeRange]);
+
+  const hasRstarData = filteredRstar.length > 0;
+
   const tabs: { value: TabValue; label: string }[] = [
     { value: 'fairvalue', label: 'Fair Value' },
+    { value: 'rstar', label: 'r* Equilíbrio' },
     { value: 'zscores', label: 'Z-Scores' },
     { value: 'regime', label: 'Regime' },
     { value: 'cyclical', label: 'Cíclico' },
     { value: 'score', label: 'Score' },
+    { value: 'weights', label: 'Pesos' },
+    { value: 'mu', label: 'Mu (E[r])' },
   ];
 
   return (
@@ -196,6 +229,78 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
           )}
 
 
+          {activeTab === 'rstar' && (
+            <div>
+              {/* Sub-view toggle */}
+              <div className="flex gap-1 mb-3 bg-secondary/30 rounded-md p-0.5 w-fit">
+                {([['real', 'r* Real'], ['selic', 'SELIC* vs SELIC'], ['gap', 'Policy Gap']] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setRstarSubView(key)}
+                    className={`px-2.5 py-1 text-[10px] font-medium rounded transition-colors ${
+                      rstarSubView === key
+                        ? 'bg-background text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="h-[360px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  {rstarSubView === 'real' && hasRstarData ? (
+                    <LineChart data={filteredRstar} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                      <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
+                      <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={[0, 10]} tickFormatter={(v: number) => `${v.toFixed(0)}%`} />
+                      <RTooltip content={<CustomTooltip />} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <ReferenceLine y={6} stroke="rgba(244,63,94,0.3)" strokeDasharray="4 3" label={{ value: 'Restritivo >6%', position: 'right', fill: 'rgba(244,63,94,0.5)', fontSize: 9 }} />
+                      <ReferenceLine y={4.5} stroke="rgba(255,255,255,0.15)" strokeDasharray="3 3" label={{ value: 'Neutro', position: 'right', fill: 'rgba(255,255,255,0.3)', fontSize: 9 }} />
+                      <ReferenceLine y={3} stroke="rgba(52,211,153,0.3)" strokeDasharray="4 3" label={{ value: 'Acomod. <3%', position: 'right', fill: 'rgba(52,211,153,0.5)', fontSize: 9 }} />
+                      <Line type="monotone" dataKey="composite_rstar" stroke="#06b6d4" strokeWidth={3} dot={false} name="r* Composto" connectNulls isAnimationActive={false} />
+                      <Line type="monotone" dataKey="rstar_fiscal" stroke="#f43f5e" strokeWidth={1.5} dot={false} name="Fiscal" strokeDasharray="6 3" connectNulls isAnimationActive={false} />
+                      <Line type="monotone" dataKey="rstar_parity" stroke="#34d399" strokeWidth={1.5} dot={false} name="Paridade" strokeDasharray="4 2" connectNulls isAnimationActive={false} />
+                      <Line type="monotone" dataKey="rstar_market_implied" stroke="#f59e0b" strokeWidth={1.5} dot={false} name="ACM" strokeDasharray="3 3" connectNulls isAnimationActive={false} />
+                      <Line type="monotone" dataKey="rstar_state_space" stroke="#a78bfa" strokeWidth={1.5} dot={false} name="Kalman" strokeDasharray="2 4" connectNulls isAnimationActive={false} />
+                    </LineChart>
+                  ) : rstarSubView === 'selic' && hasRstarData ? (
+                    <LineChart data={filteredRstar} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                      <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
+                      <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={['auto', 'auto']} tickFormatter={(v: number) => `${v.toFixed(0)}%`} />
+                      <RTooltip content={<CustomTooltip />} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Line type="monotone" dataKey="selic_star" stroke="#06b6d4" strokeWidth={2.5} dot={false} name="SELIC*" connectNulls isAnimationActive={false} />
+                      <Line type="monotone" dataKey="selic_actual" stroke="#f59e0b" strokeWidth={2} dot={false} name="SELIC Efetiva" connectNulls isAnimationActive={false} />
+                    </LineChart>
+                  ) : rstarSubView === 'gap' && hasRstarData ? (
+                    <AreaChart data={filteredRstar} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                      <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
+                      <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={[-6, 8]} tickFormatter={(v: number) => `${v.toFixed(0)}pp`} />
+                      <RTooltip content={<CustomTooltip />} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.3)" strokeWidth={1.5} />
+                      <ReferenceLine y={3} stroke="rgba(244,63,94,0.2)" strokeDasharray="3 3" label={{ value: 'Restritivo', position: 'right', fill: 'rgba(244,63,94,0.4)', fontSize: 9 }} />
+                      <ReferenceLine y={-3} stroke="rgba(52,211,153,0.2)" strokeDasharray="3 3" label={{ value: 'Acomodatício', position: 'right', fill: 'rgba(52,211,153,0.4)', fontSize: 9 }} />
+                      <Area type="monotone" dataKey="policy_gap" stroke="#06b6d4" fill="#06b6d4" fillOpacity={0.15} strokeWidth={2} name="Policy Gap (SELIC - SELIC*)" connectNulls isAnimationActive={false} />
+                    </AreaChart>
+                  ) : (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center">
+                        <p className="text-sm text-muted-foreground">Dados de r* Equilíbrio não disponíveis nesta versão.</p>
+                        <p className="text-xs text-muted-foreground/60 mt-1">Será gerado na próxima execução do pipeline.</p>
+                      </div>
+                    </div>
+                  )}
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
           {activeTab === 'zscores' && (
             <div className="h-[360px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -215,6 +320,11 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
                   <Line type="monotone" dataKey="Z_X5_dolar_global" stroke={COLORS.z_x5} strokeWidth={2.5} strokeOpacity={1} dot={false} name="Dólar Global" connectNulls isAnimationActive={false} />
                   <Line type="monotone" dataKey="Z_X6_risk_global" stroke={COLORS.z_x6} strokeWidth={2.5} strokeOpacity={1} dot={false} name="Risk Global" connectNulls isAnimationActive={false} />
                   <Line type="monotone" dataKey="Z_X7_hiato" stroke={COLORS.z_x7} strokeWidth={2.5} strokeOpacity={1} dot={false} name="Hiato" connectNulls isAnimationActive={false} />
+                  {/* v4.0: Equilibrium-derived Z-scores */}
+                  <Line type="monotone" dataKey="Z_X13_policy_gap" stroke={COLORS.z_x13} strokeWidth={2} strokeOpacity={0.8} dot={false} name="Policy Gap" connectNulls isAnimationActive={false} strokeDasharray="5 3" />
+                  <Line type="monotone" dataKey="Z_X14_rstar_composite" stroke={COLORS.z_x14} strokeWidth={2} strokeOpacity={0.8} dot={false} name="r* Composto" connectNulls isAnimationActive={false} strokeDasharray="5 3" />
+                  <Line type="monotone" dataKey="Z_X15_rstar_momentum" stroke={COLORS.z_x15} strokeWidth={2} strokeOpacity={0.8} dot={false} name="r* Momentum" connectNulls isAnimationActive={false} strokeDasharray="5 3" />
+                  <Line type="monotone" dataKey="Z_X18_selic_star_gap" stroke={COLORS.z_x18} strokeWidth={2} strokeOpacity={0.8} dot={false} name="DI1Y - SELIC*" connectNulls isAnimationActive={false} strokeDasharray="5 3" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -293,6 +403,47 @@ export function ChartsSection({ timeseries, regimeProbs, cyclicalFactors, stateV
                     <YAxis tick={{ fontSize: 10, fill: COLORS.text }} />
                   </LineChart>
                 )}
+              </ResponsiveContainer>
+            </div>
+          )}
+          {activeTab === 'weights' && (
+            <div className="h-[360px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={filteredTS} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                  <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={['auto', 'auto']} />
+                  <RTooltip content={<CustomTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
+                  <Line type="stepAfter" dataKey="weight_fx" stroke={COLORS.inst_fx} strokeWidth={2} dot={false} name="FX" connectNulls isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="weight_front" stroke={COLORS.inst_front} strokeWidth={2} dot={false} name="Front-End" connectNulls isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="weight_belly" stroke={COLORS.inst_belly} strokeWidth={2} dot={false} name="Belly" connectNulls isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="weight_long" stroke={COLORS.inst_long} strokeWidth={2} dot={false} name="Long-End" connectNulls isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="weight_hard" stroke={COLORS.inst_hard} strokeWidth={2} dot={false} name="Cupom Cambial (DDI)" connectNulls isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="weight_ntnb" stroke={COLORS.inst_ntnb} strokeWidth={2} dot={false} name="NTN-B" connectNulls isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {activeTab === 'mu' && (
+            <div className="h-[360px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={filteredTS} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                  <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 10, fill: COLORS.text }} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10, fill: COLORS.text }} domain={['auto', 'auto']} tickFormatter={(v: number) => `${v.toFixed(1)}%`} />
+                  <RTooltip content={<CustomTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
+                  <Line type="monotone" dataKey="mu_fx" stroke={COLORS.inst_fx} strokeWidth={2} dot={false} name="μ FX" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="mu_front" stroke={COLORS.inst_front} strokeWidth={2} dot={false} name="μ Front-End" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="mu_belly" stroke={COLORS.inst_belly} strokeWidth={2} dot={false} name="μ Belly" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="mu_long" stroke={COLORS.inst_long} strokeWidth={2} dot={false} name="μ Long-End" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="mu_hard" stroke={COLORS.inst_hard} strokeWidth={2} dot={false} name="μ Cupom Cambial (DDI)" connectNulls isAnimationActive={false} />
+                  <Line type="monotone" dataKey="mu_ntnb" stroke={COLORS.inst_ntnb} strokeWidth={2} dot={false} name="μ NTN-B" connectNulls isAnimationActive={false} />
+                </LineChart>
               </ResponsiveContainer>
             </div>
           )}

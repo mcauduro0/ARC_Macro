@@ -1,7 +1,7 @@
 /**
  * Portfolio Engine — Institutional-grade portfolio management for B3/BMF instruments.
  *
- * Translates Macro Risk OS model weights into:
+ * Translates ARC Macro model weights into:
  *   1. Risk budget allocation (AUM → vol target → risk units)
  *   2. B3 instrument mapping (DOL/WDO, DI1, FRA, DDI, NTN-B)
  *   3. Contract sizing (notional → contracts with rounding)
@@ -227,6 +227,14 @@ export function mapModelToB3(
       duration: 4.5,
       contractSpec: B3_INSTRUMENTS.DDI,
     },
+    {
+      modelInstrument: "ntnb",
+      b3Type: "NTNB",
+      b3Ticker: `NTNB${referenceDate.getFullYear() + 5}`,
+      tenorYears: 5,
+      duration: 4.5,
+      contractSpec: B3_INSTRUMENTS.NTNB,
+    },
   ];
 }
 
@@ -437,6 +445,20 @@ export function sizeContracts(
         entryPrice = marketData.embiSpread;
         break;
       }
+      case "ntnb": {
+        // NTN-B (Tesouro IPCA+): Duration-based sizing similar to DI
+        // Real yield ≈ DI5Y - IPCA expectations
+        const realYield = (marketData.di5y - 4.5) / 100; // proxy: DI5Y minus ~4.5% IPCA exp
+        const ntnbDuration = mapping.duration;
+        dv01Brl = absRisk / (Math.max(realYield, 0.03) * ntnbDuration * 10000);
+        // NTN-B PU based on real yield
+        const ntnbPu = spec.contractSize / Math.pow(1 + Math.max(realYield, 0.03), ntnbDuration);
+        const dv01PerNtnb = ntnbPu * ntnbDuration / 10000;
+        contractsExact = dv01PerNtnb > 0 ? (dv01Brl / dv01PerNtnb) : 0;
+        notionalBrl = Math.abs(contractsExact) * ntnbPu;
+        entryPrice = marketData.di5y - 4.5; // proxy real yield
+        break;
+      }
     }
 
     const contracts = Math.round(contractsExact);
@@ -504,11 +526,12 @@ export interface StressTest {
 
 // Correlation matrix for BRL macro instruments (historical estimates)
 const CORRELATION_MATRIX: Record<string, Record<string, number>> = {
-  fx:    { fx: 1.00, front: -0.45, belly: -0.50, long: -0.55, hard: -0.30 },
-  front: { fx: -0.45, front: 1.00, belly: 0.92, long: 0.85, hard: 0.40 },
-  belly: { fx: -0.50, front: 0.92, belly: 1.00, long: 0.95, hard: 0.45 },
-  long:  { fx: -0.55, front: 0.85, belly: 0.95, long: 1.00, hard: 0.50 },
-  hard:  { fx: -0.30, front: 0.40, belly: 0.45, long: 0.50, hard: 1.00 },
+  fx:    { fx: 1.00, front: -0.45, belly: -0.50, long: -0.55, hard: -0.30, ntnb: -0.40 },
+  front: { fx: -0.45, front: 1.00, belly: 0.92, long: 0.85, hard: 0.40, ntnb: 0.75 },
+  belly: { fx: -0.50, front: 0.92, belly: 1.00, long: 0.95, hard: 0.45, ntnb: 0.85 },
+  long:  { fx: -0.55, front: 0.85, belly: 0.95, long: 1.00, hard: 0.50, ntnb: 0.88 },
+  hard:  { fx: -0.30, front: 0.40, belly: 0.45, long: 0.50, hard: 1.00, ntnb: 0.35 },
+  ntnb:  { fx: -0.40, front: 0.75, belly: 0.85, long: 0.88, hard: 0.35, ntnb: 1.00 },
 };
 
 // Daily volatility estimates (annualized → daily)
@@ -518,6 +541,7 @@ const DAILY_VOL_ESTIMATES: Record<string, number> = {
   belly: 0.12 / Math.sqrt(252),  // ~12% annual → ~0.76% daily
   long: 0.18 / Math.sqrt(252),   // ~18% annual → ~1.13% daily
   hard: 0.10 / Math.sqrt(252),   // ~10% annual → ~0.63% daily
+  ntnb: 0.14 / Math.sqrt(252),   // ~14% annual → ~0.88% daily
 };
 
 /**
@@ -529,7 +553,7 @@ export function computeVaR(
   aumBrl: number,
   marketData?: MarketData
 ): VaRResult {
-  const instruments = ["fx", "front", "belly", "long", "hard"];
+  const instruments = ["fx", "front", "belly", "long", "hard", "ntnb"];
   const z95 = 1.645;
   const z99 = 2.326;
 
@@ -616,42 +640,42 @@ function computeStressTests(positions: ContractSizing[], aumBrl: number): Stress
     {
       name: "2008 Lehman Crisis",
       description: "Global financial crisis: BRL -30%, DI +300bps, EMBI +400bps",
-      shocks: { fx: -0.30, front: 0.03, belly: 0.03, long: 0.03, hard: -0.04 },
+      shocks: { fx: -0.30, front: 0.03, belly: 0.03, long: 0.03, hard: -0.04, ntnb: 0.025 },
       portfolioPnlBrl: 0,
       portfolioPnlPct: 0,
     },
     {
       name: "2013 Taper Tantrum",
       description: "Fed tapering: BRL -15%, DI +150bps, EMBI +100bps",
-      shocks: { fx: -0.15, front: 0.015, belly: 0.015, long: 0.015, hard: -0.01 },
+      shocks: { fx: -0.15, front: 0.015, belly: 0.015, long: 0.015, hard: -0.01, ntnb: 0.012 },
       portfolioPnlBrl: 0,
       portfolioPnlPct: 0,
     },
     {
       name: "2015 Dilma Crisis",
       description: "Fiscal/political crisis: BRL -25%, DI +400bps, EMBI +200bps",
-      shocks: { fx: -0.25, front: 0.04, belly: 0.04, long: 0.04, hard: -0.02 },
+      shocks: { fx: -0.25, front: 0.04, belly: 0.04, long: 0.04, hard: -0.02, ntnb: 0.035 },
       portfolioPnlBrl: 0,
       portfolioPnlPct: 0,
     },
     {
       name: "2020 COVID Crash",
       description: "Pandemic: BRL -20%, DI -200bps (front), +100bps (long), EMBI +300bps",
-      shocks: { fx: -0.20, front: -0.02, belly: 0.005, long: 0.01, hard: -0.03 },
+      shocks: { fx: -0.20, front: -0.02, belly: 0.005, long: 0.01, hard: -0.03, ntnb: 0.008 },
       portfolioPnlBrl: 0,
       portfolioPnlPct: 0,
     },
     {
       name: "2022 Lula Election",
       description: "Political uncertainty: BRL -10%, DI +200bps, EMBI +100bps",
-      shocks: { fx: -0.10, front: 0.02, belly: 0.02, long: 0.02, hard: -0.01 },
+      shocks: { fx: -0.10, front: 0.02, belly: 0.02, long: 0.02, hard: -0.01, ntnb: 0.015 },
       portfolioPnlBrl: 0,
       portfolioPnlPct: 0,
     },
     {
       name: "Bull Scenario: EM Rally",
       description: "Risk-on: BRL +15%, DI -200bps, EMBI -100bps",
-      shocks: { fx: 0.15, front: -0.02, belly: -0.02, long: -0.02, hard: 0.01 },
+      shocks: { fx: 0.15, front: -0.02, belly: -0.02, long: -0.02, hard: 0.01, ntnb: -0.015 },
       portfolioPnlBrl: 0,
       portfolioPnlPct: 0,
     },
@@ -676,6 +700,10 @@ function computeStressTests(positions: ContractSizing[], aumBrl: number): Stress
         // Hard: P&L = spreadDV01 * shock_bps * direction * spot
         const shockBps = shock * 10000;
         totalPnl += (pos.spreadDv01Usd || 0) * shockBps * sign * -1;
+      } else if (pos.instrument === "ntnb") {
+        // NTN-B: P&L = DV01 * shock_bps * direction (real yield shock)
+        const shockBps = shock * 10000;
+        totalPnl += (pos.dv01Brl || 0) * shockBps * sign * -1;
       }
     }
 
@@ -1063,6 +1091,14 @@ function generateInterpretation(
           : `${dir.toUpperCase()} ${contracts} contratos ${ticker} (DDI/cupom cambial). ` +
             `Spread DV01: USD ${((pos.spreadDv01Usd || 0)).toFixed(0)}/bp. ` +
             `Notional: USD ${(pos.notionalUsd / 1e6).toFixed(1)}M. ` +
+            `Risco: ${((pos.riskAllocationBrl / riskBudget.riskBudgetBrl) * 100).toFixed(1)}% do orçamento.`;
+        break;
+      case "ntnb":
+        positionRationale[inst] = pos.direction === "flat"
+          ? "Sem posição em NTN-B."
+          : `${dir.toUpperCase()} ${contracts} NTN-B ${ticker} (Tesouro IPCA+). ` +
+            `DV01: R$ ${((pos.dv01Brl || 0)).toFixed(0)}/bp. ` +
+            `Notional: R$ ${(pos.notionalBrl / 1e6).toFixed(1)}M. ` +
             `Risco: ${((pos.riskAllocationBrl / riskBudget.riskBudgetBrl) * 100).toFixed(1)}% do orçamento.`;
         break;
     }

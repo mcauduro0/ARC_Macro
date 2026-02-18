@@ -67,7 +67,7 @@ function createAuthContext(): TrpcContext {
   };
 }
 
-describe("model.latest - Macro Risk OS cross-asset data", () => {
+describe("model.latest - ARC Macro cross-asset data", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -241,12 +241,12 @@ describe("model.history", () => {
   });
 });
 
-describe("model.run - Macro Risk OS execution trigger", () => {
+describe("model.run - ARC Macro execution trigger", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("starts Macro Risk OS execution when not already running", async () => {
+  it("starts ARC Macro execution when not already running", async () => {
     mockedIsModelRunning.mockReturnValue(false);
     mockedExecuteModel.mockResolvedValue({ success: true, runId: 30002 });
 
@@ -254,7 +254,7 @@ describe("model.run - Macro Risk OS execution trigger", () => {
     const result = await caller.model.run();
 
     expect(result.success).toBe(true);
-    expect(result.message).toBe("Macro Risk OS execution started");
+    expect(result.message).toBe("ARC Macro execution started");
   });
 
   it("returns error when model is already running", async () => {

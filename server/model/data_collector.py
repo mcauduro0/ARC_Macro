@@ -25,8 +25,8 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ─── API Keys ───────────────────────────────────────────────────────
-TE_KEY = "DB5A57F91781451:A8A888DFE5F9495"
-FMP_KEY = "NzfGEUAOUqFjkYP0Q8AD48TapcCZVUEL"
+TE_KEY = os.environ.get('TE_API_KEY', 'DB5A57F91781451:A8A888DFE5F9495')
+FMP_KEY = os.environ.get('FMP_API_KEY', 'NzfGEUAOUqFjkYP0Q8AD48TapcCZVUEL')
 FRED_KEY = os.environ.get('FRED_API_KEY', 'e63bf4ad4b21136be0b68c27e7e510d9')
 POLYGON_KEY = os.environ.get('POLYGON_API_KEY', '')
 
@@ -875,7 +875,101 @@ def collect_structural():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# VALIDATION
+# WORLD BANK STRUCTURAL DATA (GDP per capita, Current Account, Trade)
+# ═══════════════════════════════════════════════════════════════════
+
+def _fetch_wb_indicator(country, indicator, timeout=30):
+    """Fetch a World Bank indicator series for a country."""
+    url = f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json&per_page=100"
+    try:
+        r = requests.get(url, timeout=timeout)
+        if r.status_code == 200:
+            payload = r.json()
+            if len(payload) > 1 and payload[1]:
+                records = []
+                for d in payload[1]:
+                    if d['value'] is not None:
+                        records.append((f"{d['date']}-01-01", float(d['value'])))
+                if records:
+                    df = pd.DataFrame(records, columns=['date', 'value'])
+                    df['date'] = pd.to_datetime(df['date'])
+                    return df.set_index('date')['value'].sort_index()
+    except Exception as e:
+        log(f"  [WB] {indicator} ({country}): {e}")
+    return pd.Series(dtype=float)
+
+
+def collect_world_bank():
+    """Collect World Bank structural data for PPP Balassa-Samuelson and FEER models.
+
+    Produces:
+      - GDP_PER_CAPITA.csv: columns [date, gdppc_ratio] where ratio = BR/US
+      - CURRENT_ACCOUNT.csv: columns [date, ca_pct_gdp] for Brazil
+      - TRADE_OPENNESS.csv: columns [date, trade_pct_gdp] for Brazil
+    """
+    log("\n[WORLD BANK]")
+    result = {}
+
+    # ── GDP Per Capita Ratio (BR/US) ──────────────────────────────
+    try:
+        gdp_br = _fetch_wb_indicator('BRA', 'NY.GDP.PCAP.CD')
+        gdp_us = _fetch_wb_indicator('USA', 'NY.GDP.PCAP.CD')
+        if not gdp_br.empty and not gdp_us.empty:
+            common = gdp_br.index.intersection(gdp_us.index)
+            if len(common) > 5:
+                ratio = gdp_br.reindex(common) / gdp_us.reindex(common)
+                df = pd.DataFrame({'gdppc_ratio': ratio})
+                df.index.name = 'date'
+                df.to_csv(os.path.join(DATA_DIR, 'GDP_PER_CAPITA.csv'))
+                result['GDP_PER_CAPITA'] = ratio
+                log(f"  GDP per capita ratio (BR/US): {len(ratio)} pts, last={ratio.iloc[-1]:.4f} ({ratio.index[-1].year})")
+            else:
+                log(f"  GDP per capita: insufficient overlap ({len(common)} years)")
+        else:
+            log(f"  GDP per capita: BR={len(gdp_br)} pts, US={len(gdp_us)} pts")
+    except Exception as e:
+        log(f"  GDP per capita ratio: {e}")
+
+    # ── Current Account % of GDP (Brazil) ─────────────────────────
+    try:
+        ca = _fetch_wb_indicator('BRA', 'BN.CAB.XOKA.GD.ZS')
+        if not ca.empty:
+            df = pd.DataFrame({'ca_pct_gdp': ca})
+            df.index.name = 'date'
+            df.to_csv(os.path.join(DATA_DIR, 'CURRENT_ACCOUNT.csv'))
+            result['CURRENT_ACCOUNT'] = ca
+            log(f"  Current Account % GDP: {len(ca)} pts, last={ca.iloc[-1]:.2f}% ({ca.index[-1].year})")
+        else:
+            log(f"  Current Account: no data")
+    except Exception as e:
+        log(f"  Current Account: {e}")
+
+    # ── Trade Openness % of GDP (Brazil) ──────────────────────────
+    try:
+        trade = _fetch_wb_indicator('BRA', 'NE.TRD.GNFS.ZS')
+        if not trade.empty:
+            df = pd.DataFrame({'trade_pct_gdp': trade})
+            df.index.name = 'date'
+            df.to_csv(os.path.join(DATA_DIR, 'TRADE_OPENNESS.csv'))
+            result['TRADE_OPENNESS'] = trade
+            log(f"  Trade Openness % GDP: {len(trade)} pts, last={trade.iloc[-1]:.2f}% ({trade.index[-1].year})")
+        else:
+            log(f"  Trade Openness: no data")
+    except Exception as e:
+        log(f"  Trade Openness: {e}")
+
+    # Cache fallback for any missing data
+    for name in ['GDP_PER_CAPITA', 'CURRENT_ACCOUNT', 'TRADE_OPENNESS']:
+        if name not in result:
+            fpath = os.path.join(DATA_DIR, f'{name}.csv')
+            if os.path.exists(fpath):
+                log(f"  {name}: using cached file")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# VALIDATIONON
 # ═══════════════════════════════════════════════════════════════════
 
 def validate_data(all_data):
@@ -1151,8 +1245,7 @@ def merge_sources(all_data):
         if (pd.Timestamp.now() - embi.index[-1]).days > 60:
             log(f"  EMBI_SPREAD: stale ({embi.index[-1].strftime('%Y-%m-%d')}), extending with FRED")
             try:
-                fred_key = os.environ.get('FRED_API_KEY', 'e63bf4ad4b21136be0b68c27e7e510d9')
-                url = f"https://api.stlouisfed.org/fred/series/observations?series_id=BAMLEMCBPIOAS&api_key={fred_key}&file_type=json&observation_start=2020-01-01"
+                url = f"https://api.stlouisfed.org/fred/series/observations?series_id=BAMLEMCBPIOAS&api_key={FRED_KEY}&file_type=json&observation_start=2020-01-01"
                 r = requests.get(url, timeout=TIMEOUT)
                 if r.status_code == 200:
                     obs = r.json().get('observations', [])
@@ -1195,6 +1288,112 @@ def merge_sources(all_data):
 # MAIN PIPELINE
 # ═══════════════════════════════════════════════════════════════════
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+# POLYGON.IO (FX, Commodities, US Equities - supplementary source)
+# ═══════════════════════════════════════════════════════════════════
+def collect_polygon():
+    """Fetch market data from Polygon.io API.
+    Available: USDBRL FX, commodity ETFs (VALE, USO, GLD), US indices (NDX).
+    NOT available on free plan: VIX, SPX, DXY.
+    """
+    log("\n[POLYGON.IO]")
+    api_key = os.environ.get('POLYGON_API_KEY', '')
+    if not api_key:
+        log("  [POLYGON] No API key found, skipping")
+        return {}
+    
+    result = {}
+    tickers = {
+        'USDBRL_POLY': ('C:USDBRL', 'FX'),
+        'EWZ_POLY':    ('EWZ', 'Equity'),
+        'VALE_POLY':   ('VALE', 'Equity'),
+        'USO_POLY':    ('USO', 'Equity'),
+        'GLD_POLY':    ('GLD', 'Equity'),
+        'TLT_POLY':    ('TLT', 'Equity'),
+        'NDX_POLY':    ('I:NDX', 'Index'),
+    }
+    
+    for name, (ticker, mkt) in tickers.items():
+        try:
+            url = (f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/"
+                   f"{START_DATE}/{datetime.now().strftime('%Y-%m-%d')}?"
+                   f"adjusted=true&sort=asc&limit=50000&apiKey={api_key}")
+            r = requests.get(url, timeout=15)
+            d = r.json()
+            if d.get('results'):
+                bars = d['results']
+                dates = pd.to_datetime([b['t'] for b in bars], unit='ms')
+                closes = [b['c'] for b in bars]
+                s = pd.Series(closes, index=dates, name=name)
+                s.index = s.index.tz_localize(None) if hasattr(s.index, 'tz') and s.index.tz else s.index
+                save_series(s, name)
+                result[name] = s
+                log(f"  [POLYGON] {name}: {len(s)} pts, last={s.iloc[-1]:.4f}")
+            else:
+                msg = d.get('message', d.get('error', 'No data'))
+                log(f"  [POLYGON] {name}: {msg}")
+        except Exception as e:
+            log(f"  [POLYGON] {name}: {e}")
+        time.sleep(0.2)  # Rate limit
+    
+    return result
+
+# ═══════════════════════════════════════════════════════════════════
+# TESOURO DIRETO (NTN-B yields from Tesouro Transparente - FREE, no auth)
+# ═══════════════════════════════════════════════════════════════════
+def collect_tesouro_direto():
+    """Fetch NTN-B yields from Tesouro Transparente secondary market data.
+    Source: https://www.tesourotransparente.gov.br
+    "Tesouro IPCA+" = NTN-B Principal, "Tesouro IPCA+ com Juros Semestrais" = NTN-B
+    """
+    log("\n[TESOURO DIRETO - NTN-B Yields]")
+    result = {}
+    try:
+        url = ("https://www.tesourotransparente.gov.br/ckan/dataset/"
+               "df56aa42-484a-4a59-8184-7676580c81e3/resource/"
+               "796d2059-14e9-44e3-80c9-2d9e30b405c1/download/"
+               "PressaoMercadoSecundario.csv")
+        r = requests.get(url, timeout=60, headers={'User-Agent': 'Mozilla/5.0'})
+        if r.status_code != 200:
+            log(f"  [TESOURO] HTTP {r.status_code}")
+            return result
+
+        import io
+        df = pd.read_csv(io.StringIO(r.text), sep=';', decimal=',')
+        log(f"  [TESOURO] Downloaded {len(df)} rows")
+
+        # Filter IPCA-linked bonds (NTN-B family)
+        ipca = df[df['Tipo Titulo'].str.contains('IPCA', na=False)].copy()
+        ipca['Data Base'] = pd.to_datetime(ipca['Data Base'], format='%d/%m/%Y')
+        ipca['Data Vencimento'] = pd.to_datetime(ipca['Data Vencimento'], format='%d/%m/%Y')
+        ipca['YTM'] = (ipca['Data Vencimento'] - ipca['Data Base']).dt.days / 365.25
+        ipca['Yield'] = (ipca['Taxa Compra Manha'] + ipca['Taxa Venda Manha']) / 2
+
+        # 5Y bucket (4-6 years to maturity)
+        bucket_5y = ipca[(ipca['YTM'] >= 4) & (ipca['YTM'] <= 6)]
+        if len(bucket_5y) > 0:
+            daily_5y = bucket_5y.groupby('Data Base')['Yield'].mean()
+            daily_5y = daily_5y.sort_index()
+            save_series(daily_5y, 'TESOURO_NTNB_5Y')
+            result['TESOURO_NTNB_5Y'] = daily_5y
+            log(f"  [TESOURO] NTNB_5Y: {len(daily_5y)} pts, last={daily_5y.iloc[-1]:.2f}%")
+
+        # 10Y bucket (8-12 years to maturity)
+        bucket_10y = ipca[(ipca['YTM'] >= 8) & (ipca['YTM'] <= 12)]
+        if len(bucket_10y) > 0:
+            daily_10y = bucket_10y.groupby('Data Base')['Yield'].mean()
+            daily_10y = daily_10y.sort_index()
+            save_series(daily_10y, 'TESOURO_NTNB_10Y')
+            result['TESOURO_NTNB_10Y'] = daily_10y
+            log(f"  [TESOURO] NTNB_10Y: {len(daily_10y)} pts, last={daily_10y.iloc[-1]:.2f}%")
+
+    except Exception as e:
+        log(f"  [TESOURO] Error: {e}")
+
+    return result
+
 def collect_all():
     """Run the full data collection pipeline."""
     log("=" * 60)
@@ -1236,11 +1435,16 @@ def collect_all():
 
     # 7. Structural (PPP, REER)
     all_data.update(collect_structural())
-
-    # 8. Merge best sources (ANBIMA > TE > SELIC construction)
+    # 7b. World Bank (GDP per capita ratio, Current Account, Trade Openness)
+    collect_world_bank()  # Saves CSV files directly for model consumption
+    # 8. Polygon.io (FX, commodities, US equities))
+    all_data.update(collect_polygon())
+    # 9. Tesouro Direto (NTN-B yields - FREE, no auth needed)
+    all_data.update(collect_tesouro_direto())
+    # 10. Merge best sources (ANBIMA > TE > SELIC construction)
     all_data = merge_sources(all_data)
 
-    # 9. Validate
+    # 11. Validate
     validate_data(all_data)
 
     # Summary

@@ -71,6 +71,69 @@
       "when": 1771033371814,
       "tag": "0009_oval_argent",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1771102760168,
+      "tag": "0010_tricky_mimic",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1771103504654,
+      "tag": "0011_secret_albert_cleary",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1771120597666,
+      "tag": "0012_puzzling_james_howlett",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1771124429180,
+      "tag": "0013_lonely_beyonder",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1771172040322,
+      "tag": "0014_confused_callisto",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1771198299213,
+      "tag": "0015_optimal_the_hood",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1771199484487,
+      "tag": "0016_natural_night_thrasher",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1771201157792,
+      "tag": "0017_supreme_puppet_master",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1771201218272,
+      "tag": "0018_melted_radioactive_man",
+      "breakpoints": true
     }
   ]
 }

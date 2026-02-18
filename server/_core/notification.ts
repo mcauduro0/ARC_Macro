@@ -58,28 +58,11 @@ const validatePayload = (input: NotificationPayload): NotificationPayload => {
 };
 
 /**
- * Dispatches a project-owner notification through the Manus Notification Service.
- * Returns `true` if the request was accepted, `false` when the upstream service
- * cannot be reached (callers can fall back to email/slack). Validation errors
- * bubble up as TRPC errors so callers can fix the payload.
+ * Send notification via Manus Forge API (original implementation).
  */
-export async function notifyOwner(
-  payload: NotificationPayload
-): Promise<boolean> {
-  const { title, content } = validatePayload(payload);
-
-  if (!ENV.forgeApiUrl) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Notification service URL is not configured.",
-    });
-  }
-
-  if (!ENV.forgeApiKey) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Notification service API key is not configured.",
-    });
+async function notifyViaManus(title: string, content: string): Promise<boolean> {
+  if (!ENV.forgeApiUrl || !ENV.forgeApiKey) {
+    return false;
   }
 
   const endpoint = buildEndpointUrl(ENV.forgeApiUrl);
@@ -99,7 +82,7 @@ export async function notifyOwner(
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
       console.warn(
-        `[Notification] Failed to notify owner (${response.status} ${response.statusText})${
+        `[Notification] Manus Forge failed (${response.status} ${response.statusText})${
           detail ? `: ${detail}` : ""
         }`
       );
@@ -108,7 +91,72 @@ export async function notifyOwner(
 
     return true;
   } catch (error) {
-    console.warn("[Notification] Error calling notification service:", error);
+    console.warn("[Notification] Manus Forge error:", error);
     return false;
   }
+}
+
+/**
+ * Send notification via email (SMTP / nodemailer).
+ * Used when Manus Forge is not available (DigitalOcean deployment).
+ */
+async function notifyViaEmail(title: string, content: string): Promise<boolean> {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const notifyEmail = process.env.NOTIFY_EMAIL || smtpUser;
+
+  if (!smtpHost || !smtpUser || !smtpPass || !notifyEmail) {
+    console.log(`[Notification] (no SMTP configured) ${title}\n${content}`);
+    return true;
+  }
+
+  try {
+    const nodemailer = await import("nodemailer");
+    const port = parseInt(process.env.SMTP_PORT || "587");
+    const transporter = nodemailer.default.createTransport({
+      host: smtpHost,
+      port,
+      secure: port === 465,
+      auth: { user: smtpUser, pass: smtpPass },
+    });
+
+    await transporter.sendMail({
+      from: `"BRLUSD Dashboard" <${smtpUser}>`,
+      to: notifyEmail,
+      subject: `[BRLUSD] ${title}`,
+      text: content,
+      html: `<h3>${title}</h3><pre style="white-space:pre-wrap;font-family:monospace;">${content}</pre>`,
+    });
+
+    console.log(`[Notification] Email sent: ${title}`);
+    return true;
+  } catch (error) {
+    console.warn("[Notification] Email send failed:", error);
+    return true; // Don't block pipeline on notification failure
+  }
+}
+
+/**
+ * Dispatches a project-owner notification.
+ * 
+ * Strategy:
+ * 1. If Manus Forge API is configured → use it (Manus hosting)
+ * 2. If SMTP is configured → send email (DigitalOcean deployment)
+ * 3. Otherwise → log to console (development)
+ */
+export async function notifyOwner(
+  payload: NotificationPayload
+): Promise<boolean> {
+  const { title, content } = validatePayload(payload);
+
+  // Try Manus Forge first (works on Manus hosting)
+  if (ENV.forgeApiUrl && ENV.forgeApiKey) {
+    const success = await notifyViaManus(title, content);
+    if (success) return true;
+    // Fall through to email if Forge fails
+  }
+
+  // Try email (works on DigitalOcean)
+  return notifyViaEmail(title, content);
 }

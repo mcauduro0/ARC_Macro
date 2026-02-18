@@ -1,0 +1,1 @@
+ALTER TABLE `model_changelog` ADD `weightNtnb` double;

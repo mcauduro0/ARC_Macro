@@ -25,11 +25,11 @@ interface Props {
 }
 
 const INSTRUMENT_LABELS: Record<string, string> = {
-  fx: 'FX (USDBRL)',
+  fx: 'DOL Futuro (Câmbio)',
   front: 'Front-End (DI 1Y)',
   belly: 'Belly (DI 5Y)',
   long: 'Long-End (DI 10Y)',
-  hard: 'Hard Currency (EMBI)',
+  hard: 'Cupom Cambial (DDI) (EMBI)',
 };
 
 const FEATURE_LABELS: Record<string, string> = {
@@ -51,9 +51,34 @@ const FEATURE_LABELS: Record<string, string> = {
   Z_portfolio_flow: 'Fluxo Portfólio',
   Z_hiato: 'Hiato do Produto',
   Z_embi: 'EMBI Spread',
+  // v4.0: Equilibrium-derived features
+  Z_policy_gap: 'Policy Gap (SELIC-SELIC*)',
+  Z_rstar_composite: 'r* Composto',
+  Z_rstar_momentum: 'r* Momentum (6m)',
+  Z_fiscal_component: 'Componente Fiscal r*',
+  Z_sovereign_component: 'Componente Soberano r*',
+  Z_selic_star_gap: 'DI1Y - SELIC*',
+  rstar_regime_signal: 'Sinal Regime r*',
+  Z_rstar_curve_gap: 'DI5Y - SELIC*',
+  // Carry & valuation features
+  carry_fx: 'Carry FX',
+  carry_front: 'Carry Front',
+  carry_belly: 'Carry Belly',
+  carry_long: 'Carry Long',
+  carry_hard: 'Carry Hard',
+  mu_fx_val: 'FX Valuation (mu)',
+  Z_tp_5y: 'Term Premium 5Y',
+  Z_fiscal_premium: 'Prêmio Fiscal',
+  Z_debt_accel: 'Aceleração Dívida',
+  Z_us_real_yield: 'US Real Yield',
+  Z_us_breakeven: 'US Breakeven',
+  Z_pb_momentum: 'Momentum PB',
+  Z_hy_spread: 'HY Spread',
+  Z_ewz: 'EWZ',
+  Z_bop: 'Balança Pagamentos',
 };
 
-// Distinct color palette for stacked area chart (up to 18 features)
+// Distinct color palette for stacked area chart (up to 26 features)
 const FEATURE_COLORS = [
   '#60a5fa', // blue-400
   '#f97316', // orange-500
@@ -73,6 +98,14 @@ const FEATURE_COLORS = [
   '#818cf8', // indigo-400
   '#fb923c', // orange-400
   '#94a3b8', // slate-400
+  '#d946ef', // fuchsia-500
+  '#14b8a6', // teal-500
+  '#ef4444', // red-500
+  '#6366f1', // indigo-500
+  '#84cc16', // lime-500
+  '#ec4899', // pink-500
+  '#0ea5e9', // sky-500
+  '#eab308', // yellow-500
 ];
 
 function formatDate(dateStr: string): string {

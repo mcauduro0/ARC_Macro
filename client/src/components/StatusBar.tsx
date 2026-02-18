@@ -1,5 +1,6 @@
 import { MacroDashboard, useModelStatus, useRunModel } from '@/hooks/useModelData';
 import { TrendingUp, TrendingDown, Minus, Activity, Shield, Zap, AlertTriangle, RefreshCw, Wifi, WifiOff, Loader2, BarChart3 } from 'lucide-react';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import { Link } from 'wouter';
@@ -59,7 +60,7 @@ export function StatusBar({ dashboard, source = 'embedded', lastUpdated }: Props
     runModel.mutate(undefined, {
       onSuccess: (data) => {
         if (data.success) {
-          toast.success('Macro Risk OS em execução. Dados atualizados em ~5 min.');
+          toast.success('ARC Macro em execução. Dados atualizados em ~5 min.');
         } else {
           toast.error(data.error || 'Erro ao iniciar modelo');
         }
@@ -86,7 +87,7 @@ export function StatusBar({ dashboard, source = 'embedded', lastUpdated }: Props
             <div className="flex items-center gap-3">
               <div className={`w-2 h-2 rounded-full ${source === 'live' ? 'bg-emerald-400' : 'bg-amber-400'} animate-pulse`} />
               <h1 className="text-sm font-semibold tracking-wide uppercase text-foreground/90">
-                Macro Risk OS
+                ARC Macro
               </h1>
               {source === 'live' ? (
                 <span className="hidden lg:flex items-center gap-1 text-[10px] text-emerald-400/70 uppercase tracking-wider">
@@ -153,6 +154,7 @@ export function StatusBar({ dashboard, source = 'embedded', lastUpdated }: Props
                 {isRunning ? 'Running' : 'Refresh'}
               </span>
             </button>
+            <ThemeToggle size="sm" />
             <span className="text-xs text-muted-foreground font-data">
               {d.run_date}
             </span>

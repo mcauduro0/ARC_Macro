@@ -7,6 +7,12 @@ import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl } from "./const";
 import "./index.css";
+import { registerServiceWorker } from "@/lib/pwa";
+
+// Register PWA service worker
+if (typeof window !== 'undefined') {
+  registerServiceWorker();
+}
 
 const queryClient = new QueryClient();
 
@@ -15,8 +21,11 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (typeof window === "undefined") return;
 
   const isUnauthorized = error.message === UNAUTHED_ERR_MSG;
-
   if (!isUnauthorized) return;
+
+  // Skip redirect if OAuth is not configured (DigitalOcean standalone deployment)
+  const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL;
+  if (!oauthPortalUrl) return;
 
   window.location.href = getLoginUrl();
 };

@@ -1,0 +1,1 @@
+ALTER TABLE `model_alerts` MODIFY COLUMN `alertType` enum('regime_change','shap_shift','score_change','drawdown_warning','model_degradation','data_quality') NOT NULL;

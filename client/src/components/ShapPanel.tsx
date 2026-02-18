@@ -30,11 +30,11 @@ interface Props {
 }
 
 const INSTRUMENT_LABELS: Record<string, string> = {
-  fx: 'FX (USDBRL)',
+  fx: 'DOL Futuro (Câmbio)',
   front: 'Front-End (DI 1Y)',
   belly: 'Belly (DI 5Y)',
   long: 'Long-End (DI 10Y)',
-  hard: 'Hard Currency (EMBI)',
+  hard: 'Cupom Cambial (DDI) (EMBI)',
 };
 
 const FEATURE_LABELS: Record<string, string> = {
@@ -56,6 +56,31 @@ const FEATURE_LABELS: Record<string, string> = {
   Z_portfolio_flow: 'Fluxo Portfólio',
   Z_hiato: 'Hiato do Produto',
   Z_embi: 'EMBI Spread',
+  // v4.0: Equilibrium-derived features
+  Z_policy_gap: 'Policy Gap (SELIC-SELIC*)',
+  Z_rstar_composite: 'r* Composto',
+  Z_rstar_momentum: 'r* Momentum (6m)',
+  Z_fiscal_component: 'Componente Fiscal r*',
+  Z_sovereign_component: 'Componente Soberano r*',
+  Z_selic_star_gap: 'DI1Y - SELIC*',
+  rstar_regime_signal: 'Sinal Regime r*',
+  Z_rstar_curve_gap: 'DI5Y - SELIC*',
+  // Carry & valuation features
+  carry_fx: 'Carry FX',
+  carry_front: 'Carry Front',
+  carry_belly: 'Carry Belly',
+  carry_long: 'Carry Long',
+  carry_hard: 'Carry Hard',
+  mu_fx_val: 'FX Valuation (mu)',
+  Z_tp_5y: 'Term Premium 5Y',
+  Z_fiscal_premium: 'Prêmio Fiscal',
+  Z_debt_accel: 'Aceleração Dívida',
+  Z_us_real_yield: 'US Real Yield',
+  Z_us_breakeven: 'US Breakeven',
+  Z_pb_momentum: 'Momentum PB',
+  Z_hy_spread: 'HY Spread',
+  Z_ewz: 'EWZ',
+  Z_bop: 'Balança Pagamentos',
 };
 
 function getBarColor(value: number): string {

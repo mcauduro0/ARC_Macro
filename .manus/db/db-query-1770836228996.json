@@ -1,9 +1,0 @@
-{
-  "query": "UPDATE model_runs SET cyclicalJson = CAST('[]' AS JSON) WHERE id = (SELECT id FROM (SELECT id FROM model_runs ORDER BY createdAt DESC LIMIT 1) AS t);",
-  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2irFxzKmmF81jwU.root --database B2WSzxNLAGDJfUWCDHQ9cT --execute UPDATE model_runs SET cyclicalJson = CAST('[]' AS JSON) WHERE id = (SELECT id FROM (SELECT id FROM model_runs ORDER BY createdAt DESC LIMIT 1) AS t);",
-  "rows": [],
-  "messages": [],
-  "stdout": "",
-  "stderr": "",
-  "execution_time_ms": 58
-}

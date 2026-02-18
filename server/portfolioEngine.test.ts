@@ -33,6 +33,7 @@ const MODEL_WEIGHTS: Record<string, number> = {
   belly: 0.0,
   long: 0.249,
   hard: 0.182,
+  ntnb: 0.0,
 };
 
 const EXPECTED_RETURNS: Record<string, number> = {
@@ -41,6 +42,7 @@ const EXPECTED_RETURNS: Record<string, number> = {
   belly: 0.0,
   long: 0.04379,
   hard: -0.0025,
+  ntnb: 0.0,
 };
 
 describe("B3 Ticker Generation", () => {
@@ -109,9 +111,9 @@ describe("B3 Instrument Specifications", () => {
 });
 
 describe("Model to B3 Mapping", () => {
-  it("maps all 5 model instruments", () => {
+  it("maps all 6 model instruments", () => {
     const mappings = mapModelToB3("WDO");
-    expect(mappings).toHaveLength(5);
+    expect(mappings).toHaveLength(6);
     const instruments = mappings.map(m => m.modelInstrument);
     expect(instruments).toContain("fx");
     expect(instruments).toContain("front");
@@ -313,7 +315,7 @@ describe("VaR Computation", () => {
     const positions = sizeContracts(budget, mappings, MARKET_DATA);
     const varResult = computeVaR(positions, 100_000_000, MARKET_DATA);
 
-    expect(varResult.componentVar).toHaveLength(5);
+    expect(varResult.componentVar).toHaveLength(6);
   });
 
   it("has stress test scenarios", () => {

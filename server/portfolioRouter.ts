@@ -76,6 +76,7 @@ const portfolioConfigInput = z.object({
   enableBelly: z.boolean().default(true),
   enableLong: z.boolean().default(true),
   enableHard: z.boolean().default(true),
+  enableNtnb: z.boolean().default(true),
   maxDrawdownPct: z.number().min(-0.50).max(-0.01).default(-0.10),
   maxLeverageGross: z.number().min(1).max(20).default(5.0),
 });
@@ -88,7 +89,7 @@ const executeTradeInput = z.object({
 });
 
 const recordTradeInput = z.object({
-  instrument: z.enum(["fx", "front", "belly", "long", "hard"]),
+  instrument: z.enum(["fx", "front", "belly", "long", "hard", "ntnb"]),
   b3Ticker: z.string().min(3),
   b3InstrumentType: z.string().min(2),
   action: z.enum(["BUY", "SELL"]),
@@ -115,6 +116,8 @@ const recordPnlInput = z.object({
   bellyPnlBrl: z.number().optional(),
   longPnlBrl: z.number().optional(),
   hardPnlBrl: z.number().optional(),
+  ntnbPnlBrl: z.number().optional(),
+  ntnbRealYield: z.number().optional(),
 });
 
 // ============================================================
@@ -148,6 +151,7 @@ function extractModelWeights(dashboard: Record<string, unknown>) {
     belly: pos.belly?.weight ?? d.belly_weight ?? 0,
     long: pos.long?.weight ?? d.long_weight ?? 0,
     hard: pos.hard?.weight ?? d.hard_weight ?? 0,
+    ntnb: pos.ntnb?.weight ?? d.ntnb_weight ?? 0,
   };
   // Expected returns are annualized percentages in positions.*.expected_return_6m (6M, so *2 for annual)
   // Convert from percentage to decimal: 4.75% -> 0.0475
@@ -157,6 +161,7 @@ function extractModelWeights(dashboard: Record<string, unknown>) {
     belly: (pos.belly?.expected_return_6m ?? 0) * 2 / 100,
     long: (pos.long?.expected_return_6m ?? 0) * 2 / 100,
     hard: (pos.hard?.expected_return_6m ?? 0) * 2 / 100,
+    ntnb: (pos.ntnb?.expected_return_6m ?? 0) * 2 / 100,
   };
   return { weights, expectedReturns };
 }
@@ -165,7 +170,7 @@ function sizingToDbPosition(sizing: ContractSizing, configId: number, snapshotId
   return {
     configId,
     snapshotId: snapshotId ?? null,
-    instrument: sizing.instrument as "fx" | "front" | "belly" | "long" | "hard",
+    instrument: sizing.instrument as "fx" | "front" | "belly" | "long" | "hard" | "ntnb",
     b3Ticker: sizing.b3Ticker,
     b3InstrumentType: sizing.b3Type,
     direction: sizing.direction,
@@ -194,6 +199,7 @@ function filterWeights(config: any, weights: Record<string, number>, returns: Re
   if (config.enableBelly) { fw.belly = weights.belly; fr.belly = returns.belly; }
   if (config.enableLong) { fw.long = weights.long; fr.long = returns.long; }
   if (config.enableHard) { fw.hard = weights.hard; fr.hard = returns.hard; }
+  if (config.enableNtnb) { fw.ntnb = weights.ntnb; fr.ntnb = returns.ntnb; }
   return { filteredWeights: fw, filteredReturns: fr };
 }
 
@@ -245,6 +251,7 @@ export const portfolioRouter = router({
           enableBelly: input.enableBelly,
           enableLong: input.enableLong,
           enableHard: input.enableHard,
+            enableNtnb: input.enableNtnb,
           fxInstrument: input.fxInstrument,
           maxDrawdownPct: input.maxDrawdownPct,
           maxLeverageGross: input.maxLeverageGross,
@@ -624,6 +631,7 @@ export const portfolioRouter = router({
         let bellyPnl = input.bellyPnlBrl || 0;
         let longPnl = input.longPnlBrl || 0;
         let hardPnl = input.hardPnlBrl || 0;
+        let ntnbPnl = input.ntnbPnlBrl || 0;
 
         // If market prices provided, compute MTM P&L
         if (input.spotUsdbrl || input.di1y || input.di5y || input.di10y || input.embiSpread) {
@@ -651,10 +659,14 @@ export const portfolioRouter = router({
               const spreadDelta = (input.embiSpread - entryPrice);
               hardPnl = (pos.spreadDv01Usd || 0) * spreadDelta * sign * -1;
             }
+            if (pos.instrument === "ntnb" && input.ntnbRealYield) {
+              const yieldDelta = (input.ntnbRealYield - entryPrice) * 100;
+              ntnbPnl = (pos.dv01Brl || 0) * yieldDelta * sign * -1;
+            }
           }
         }
 
-        const overlayPnl = fxPnl + frontPnl + bellyPnl + longPnl + hardPnl;
+        const overlayPnl = fxPnl + frontPnl + bellyPnl + longPnl + hardPnl + ntnbPnl;
         const cdiPnl = config.aumBrl * ((config.volTargetAnnual > 0 ? 0.1375 : 0.1375) / 252); // CDI ~13.75% a.a.
         const totalPnl = overlayPnl + cdiPnl;
 
@@ -681,6 +693,7 @@ export const portfolioRouter = router({
           bellyPnlBrl: bellyPnl,
           longPnlBrl: longPnl,
           hardPnlBrl: hardPnl,
+          ntnbPnlBrl: ntnbPnl,
           cumulativePnlBrl: cumulativePnl,
           cumulativePnlPct: config.aumBrl > 0 ? (cumulativePnl / config.aumBrl) * 100 : 0,
           cdiDailyPnlBrl: cdiPnl,
