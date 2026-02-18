@@ -6,7 +6,28 @@ import { insertModelRun, getLatestModelRun } from "./db";
 import { generatePostRunAlerts } from "./alertEngine";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MODEL_SCRIPT = path.join(__dirname, "model", "run_model.py");
+
+// In production build, __dirname is /opt/.../dist/ but model lives in /opt/.../server/model/
+// Detect the project root and resolve the model script path correctly
+function resolveModelScript(): string {
+  // Try relative to __dirname (works in dev: server/modelRunner.ts -> server/model/)
+  const devPath = path.join(__dirname, "model", "run_model.py");
+  if (fs.existsSync(devPath)) return devPath;
+  
+  // Try from project root (works in production: dist/ -> server/model/)
+  const projectRoot = path.resolve(__dirname, "..");
+  const prodPath = path.join(projectRoot, "server", "model", "run_model.py");
+  if (fs.existsSync(prodPath)) return prodPath;
+  
+  // Fallback: try process.cwd()
+  const cwdPath = path.join(process.cwd(), "server", "model", "run_model.py");
+  if (fs.existsSync(cwdPath)) return cwdPath;
+  
+  console.warn(`[ModelRunner] run_model.py not found. Tried: ${devPath}, ${prodPath}, ${cwdPath}`);
+  return prodPath; // Return best guess
+}
+
+const MODEL_SCRIPT = resolveModelScript();
 
 /**
  * S3 URL for the latest model output (uploaded from sandbox).
@@ -257,7 +278,7 @@ function runPythonModel(pythonBin: string): Promise<string> {
 
     // Ensure Python dependencies are installed (non-blocking, best-effort)
     try {
-      const reqPath = path.join(__dirname, "model", "requirements.txt");
+      const reqPath = path.join(path.dirname(MODEL_SCRIPT), "requirements.txt");
       if (fs.existsSync(reqPath)) {
         execSync(`${pythonBin} -m pip install -q -r ${reqPath}`, {
           timeout: 120_000,
@@ -274,7 +295,7 @@ function runPythonModel(pythonBin: string): Promise<string> {
     }
 
     const proc = spawn(pythonBin, [MODEL_SCRIPT], {
-      cwd: path.join(__dirname, "model"),
+      cwd: path.dirname(MODEL_SCRIPT),
       env: cleanEnv,
       timeout: 1_800_000, // 30 minute timeout
     });
