@@ -36,7 +36,12 @@ def _winsorize(s, limits=(0.05, 0.05)):
 
 
 def _safe_align(*series, min_len=24):
-    """Align multiple series to common index, forward-fill, require min_len."""
+    """Align multiple series to common index, forward-fill, require min_len.
+    
+    IMPORTANT: Returns the same number of series as inputs to preserve
+    positional unpacking. Empty series are replaced with zero-filled series
+    on the common index.
+    """
     valid = [s for s in series if isinstance(s, pd.Series) and len(s) > 0]
     if len(valid) < 2:
         return None
@@ -45,7 +50,14 @@ def _safe_align(*series, min_len=24):
         idx = idx.intersection(s.index)
     if len(idx) < min_len:
         return None
-    return [s.reindex(idx).ffill() for s in valid], idx
+    # Preserve ALL input positions - replace empty series with zeros on common index
+    result = []
+    for s in series:
+        if isinstance(s, pd.Series) and len(s) > 0:
+            result.append(s.reindex(idx).ffill().fillna(0))
+        else:
+            result.append(pd.Series(0.0, index=idx))
+    return result, idx
 
 
 # ============================================================
@@ -322,7 +334,13 @@ class MarketImpliedRStar:
         }
 
         # Filter to tenors with sufficient data
-        valid_tenors = {k: v for k, v in tenors.items() if len(v) > 36}
+        valid_tenors = {}
+        for k, v in tenors.items():
+            try:
+                if isinstance(v, pd.Series) and len(v) > 36:
+                    valid_tenors[k] = v
+            except Exception:
+                continue
         if len(valid_tenors) < 3:
             return pd.Series(dtype=float), pd.Series(dtype=float)
 
@@ -386,9 +404,17 @@ class MarketImpliedRStar:
 
                 # Market-implied r* ≈ long-run short rate (first tenor)
                 # Use weighted average of short tenors for stability
-                tenor_weights = np.array([0.4, 0.3, 0.2] + [0.1/(len(lr_yield)-3)] * max(0, len(lr_yield)-3))
-                tenor_weights = tenor_weights[:len(lr_yield)]
-                tenor_weights /= tenor_weights.sum()
+                n_yields = len(lr_yield)
+                if n_yields <= 3:
+                    tenor_weights = np.array([0.5, 0.3, 0.2][:n_yields])
+                else:
+                    remaining_weight = 0.1 / max(1, n_yields - 3)
+                    tenor_weights = np.array([0.4, 0.3, 0.2] + [remaining_weight] * (n_yields - 3))
+                tenor_weights = tenor_weights[:n_yields]
+                tw_sum = tenor_weights.sum()
+                if tw_sum <= 0:
+                    continue
+                tenor_weights /= tw_sum
                 rstar_nominal = float(np.dot(lr_yield, tenor_weights))
 
                 # Clip to reasonable range
@@ -407,7 +433,7 @@ class MarketImpliedRStar:
                         actual_5y = window_data.iloc[-1][col_idx] if col_idx < len(window_data.columns) else 0
                         tp_5y.iloc[i] = actual_5y - expected_5y
 
-            except (np.linalg.LinAlgError, ValueError, IndexError):
+            except (np.linalg.LinAlgError, ValueError, IndexError, TypeError, ZeroDivisionError):
                 continue
 
         rstar = rstar.dropna()

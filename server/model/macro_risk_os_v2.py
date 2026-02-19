@@ -84,7 +84,7 @@ DEFAULT_CONFIG = {
     "gamma": 2.0,  # risk aversion
     "score_demeaning_window": 60,  # rolling window for score z-score normalization
     # v2.3 improvements
-    "fx_fv_weights": {"beer": 1.0},  # BEER-only fair value (institutional standard: GSDEER/BEER). PPP excluded (Balassa-Samuelson bias). Cyclical (Z_real_diff) used as trading signal via mu_fx_val, not in composite.
+    "fx_fv_weights": {"beer": 0.50, "ppp_bs": 0.25, "feer": 0.25},  # Multi-model FV: BEER primary (GSDEER), PPP_BS (Balassa-Samuelson adjusted), FEER (current account). Cyclical (Z_real_diff) used as trading signal via mu_fx_val, not in composite.
     "fx_cyclical_beta": 0.05,
     "ic_gating_threshold": 0.0,  # zero out mu for instruments with IC < threshold
     "ic_gating_min_obs": 24,  # minimum observations before IC gating kicks in

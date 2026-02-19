@@ -579,9 +579,12 @@ def fetch_bcb(code, name, start_year=2000):
                 r = requests.get(url, timeout=TIMEOUT)
                 if r.status_code == 200:
                     data = r.json()
-                    if data:
+                    if isinstance(data, list) and data:
                         all_data.extend(data)
                         chunk_ok = True
+                        break
+                    elif isinstance(data, dict):
+                        # BCB sometimes returns 200 with error dict
                         break
                     else:
                         break  # Empty response, no retry needed
@@ -595,6 +598,9 @@ def fetch_bcb(code, name, start_year=2000):
         if not chunk_ok and sy < 2026:
             failed_chunks.append((sy, ey))
         time.sleep(0.3)
+
+    # Filter: only keep list-of-dict items (BCB API sometimes returns error dicts)
+    all_data = [d for d in all_data if isinstance(d, dict) and 'data' in d and 'valor' in d]
 
     if all_data:
         df = pd.DataFrame(all_data)
@@ -677,9 +683,12 @@ def collect_bcb():
     }
     result = {}
     for name, code in mapping.items():
-        s = fetch_bcb(code, name)
-        if not s.empty:
-            result[name] = s
+        try:
+            s = fetch_bcb(code, name)
+            if not s.empty:
+                result[name] = s
+        except Exception as e:
+            log(f"  [BCB] {name} (code={code}): FAILED - {e}")
         time.sleep(0.2)
     return result
 
@@ -852,24 +861,61 @@ def collect_structural():
         if not cached.empty:
             result['PPP_FACTOR'] = cached
 
-    # BIS REER
+    # REER: BCB primary (series 11752), BIS fallback
+    reer_found = False
+
+    # Source 1: BCB SGS 11752 (Taxa de Câmbio Real Efetiva - IPCA)
     try:
-        url = "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_EER/1.0/M.R.N.BR?format=csv"
-        r = requests.get(url, timeout=TIMEOUT)
-        if r.status_code == 200:
-            from io import StringIO
-            df = pd.read_csv(StringIO(r.text))
-            if 'TIME_PERIOD' in df.columns and 'OBS_VALUE' in df.columns:
-                df['date'] = pd.to_datetime(df['TIME_PERIOD'])
-                s = df.set_index('date')['OBS_VALUE'].dropna().sort_index()
-                save_series(s, 'REER_BIS')
+        reer_data = []
+        for sy in range(2000, 2027, 5):
+            ey = min(sy + 4, 2026)
+            url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.11752/dados?formato=json&dataInicial=01/01/{sy}&dataFinal=31/12/{ey}"
+            r = requests.get(url, timeout=TIMEOUT)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list) and data:
+                    reer_data.extend(data)
+            time.sleep(0.3)
+        reer_data = [d for d in reer_data if isinstance(d, dict) and 'data' in d and 'valor' in d]
+        if reer_data:
+            df = pd.DataFrame(reer_data)
+            df['date'] = pd.to_datetime(df['data'], format='%d/%m/%Y')
+            df['value'] = pd.to_numeric(df['valor'], errors='coerce')
+            s = df.set_index('date')['value'].dropna().sort_index()
+            s = s[~s.index.duplicated(keep='last')]
+            if len(s) > 24:
+                save_series(s, 'REER_BIS')  # Save as REER_BIS for backward compat
+                save_series(s, 'REER_BCB')
                 result['REER_BIS'] = s
-                log(f"  [BIS] REER: {len(s)} pts, last={s.iloc[-1]:.2f}")
+                log(f"  [BCB] REER (11752): {len(s)} pts, last={s.iloc[-1]:.2f}")
+                reer_found = True
     except Exception as e:
-        log(f"  [BIS] REER: {e}")
+        log(f"  [BCB] REER: {e}")
+
+    # Source 2: BIS REER (fallback)
+    if not reer_found:
+        try:
+            url = "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_EER/1.0/M.R.N.BR?format=csv"
+            r = requests.get(url, timeout=TIMEOUT)
+            if r.status_code == 200:
+                from io import StringIO
+                df = pd.read_csv(StringIO(r.text))
+                if 'TIME_PERIOD' in df.columns and 'OBS_VALUE' in df.columns:
+                    df['date'] = pd.to_datetime(df['TIME_PERIOD'])
+                    s = df.set_index('date')['OBS_VALUE'].dropna().sort_index()
+                    save_series(s, 'REER_BIS')
+                    result['REER_BIS'] = s
+                    log(f"  [BIS] REER: {len(s)} pts, last={s.iloc[-1]:.2f}")
+                    reer_found = True
+        except Exception as e:
+            log(f"  [BIS] REER: {e}")
+
+    # Fallback to cache
+    if not reer_found:
         cached = load_cached('REER_BIS')
         if not cached.empty:
             result['REER_BIS'] = cached
+            log(f"  [CACHE] REER: {len(cached)} pts")
 
     return result
 
@@ -1394,6 +1440,26 @@ def collect_tesouro_direto():
 
     return result
 
+def _safe_update(all_data, collector_fn, name):
+    """Safely call a collector and merge results. Never let one failure crash the pipeline."""
+    try:
+        result = collector_fn()
+        if isinstance(result, dict):
+            # Validate: only merge pd.Series values, skip anything else
+            for k, v in result.items():
+                if isinstance(v, pd.Series):
+                    all_data[k] = v
+                else:
+                    log(f"  [WARN] {name}.{k}: expected pd.Series, got {type(v).__name__}, skipping")
+            return True
+        else:
+            log(f"  [WARN] {name} returned {type(result).__name__} instead of dict, skipping")
+            return False
+    except Exception as e:
+        log(f"  [ERROR] {name} failed: {e}")
+        return False
+
+
 def collect_all():
     """Run the full data collection pipeline."""
     log("=" * 60)
@@ -1402,59 +1468,106 @@ def collect_all():
 
     all_data = {}
     anbima_data = {}  # Store ANBIMA separately to preserve as primary
+    errors = []
 
     # 0. ANBIMA Feed API (PRIMARY for BR rates - ETTJ + NTN-B/NTN-F)
-    anbima_data = collect_anbima()
-    all_data.update(anbima_data)
+    try:
+        anbima_data = collect_anbima()
+        if isinstance(anbima_data, dict):
+            for k, v in anbima_data.items():
+                if isinstance(v, pd.Series):
+                    all_data[k] = v
+        else:
+            log(f"  [WARN] ANBIMA returned {type(anbima_data).__name__} instead of dict")
+            anbima_data = {}
+    except Exception as e:
+        log(f"  [ERROR] ANBIMA failed: {e}")
+        errors.append(('ANBIMA', str(e)))
+        anbima_data = {}
 
     # 1. DI Curve from Trading Economics (FALLBACK for BR rates)
-    # Only update keys that ANBIMA didn't provide
-    te_data = collect_di_curve()
-    for key, val in te_data.items():
-        if key not in anbima_data:
-            all_data[key] = val
-        else:
-            # Keep TE data under a separate key for reference/history
-            all_data[f'TE_{key}'] = val
-            log(f"  {key}: ANBIMA primary, TE stored as TE_{key}")
+    try:
+        te_data = collect_di_curve()
+        if isinstance(te_data, dict):
+            for key, val in te_data.items():
+                if isinstance(val, pd.Series):
+                    if key not in anbima_data:
+                        all_data[key] = val
+                    else:
+                        all_data[f'TE_{key}'] = val
+                        log(f"  {key}: ANBIMA primary, TE stored as TE_{key}")
+    except Exception as e:
+        log(f"  [ERROR] DI Curve (TE) failed: {e}")
+        errors.append(('DI_CURVE', str(e)))
 
     # 2. FRED (US rates, VIX, DXY, FCI, CPI)
-    all_data.update(collect_fred())
+    if not _safe_update(all_data, collect_fred, 'FRED'):
+        errors.append(('FRED', 'failed'))
 
     # 3. FMP US Treasury (backup)
-    all_data.update(collect_fmp_treasury())
+    if not _safe_update(all_data, collect_fmp_treasury, 'FMP'):
+        errors.append(('FMP', 'failed'))
 
     # 4. Yahoo Finance (FX, commodities, equity)
-    all_data.update(collect_yahoo())
+    if not _safe_update(all_data, collect_yahoo, 'YAHOO'):
+        errors.append(('YAHOO', 'failed'))
 
     # 5. BCB SGS (with cache fallback)
-    all_data.update(collect_bcb())
+    if not _safe_update(all_data, collect_bcb, 'BCB'):
+        errors.append(('BCB', 'failed'))
 
     # 6. IPEADATA (EMBI, SELIC Over)
-    all_data.update(collect_ipeadata())
+    if not _safe_update(all_data, collect_ipeadata, 'IPEADATA'):
+        errors.append(('IPEADATA', 'failed'))
 
     # 7. Structural (PPP, REER)
-    all_data.update(collect_structural())
+    if not _safe_update(all_data, collect_structural, 'STRUCTURAL'):
+        errors.append(('STRUCTURAL', 'failed'))
+
     # 7b. World Bank (GDP per capita ratio, Current Account, Trade Openness)
-    collect_world_bank()  # Saves CSV files directly for model consumption
-    # 8. Polygon.io (FX, commodities, US equities))
-    all_data.update(collect_polygon())
+    try:
+        collect_world_bank()  # Saves CSV files directly for model consumption
+    except Exception as e:
+        log(f"  [ERROR] World Bank failed: {e}")
+        errors.append(('WORLD_BANK', str(e)))
+
+    # 8. Polygon.io (FX, commodities, US equities)
+    if not _safe_update(all_data, collect_polygon, 'POLYGON'):
+        errors.append(('POLYGON', 'failed'))
+
     # 9. Tesouro Direto (NTN-B yields - FREE, no auth needed)
-    all_data.update(collect_tesouro_direto())
+    if not _safe_update(all_data, collect_tesouro_direto, 'TESOURO_DIRETO'):
+        errors.append(('TESOURO_DIRETO', 'failed'))
+
+    if errors:
+        log(f"\n[WARN] {len(errors)} collector(s) had errors: {[e[0] for e in errors]}")
+
     # 10. Merge best sources (ANBIMA > TE > SELIC construction)
-    all_data = merge_sources(all_data)
+    try:
+        all_data = merge_sources(all_data)
+    except Exception as e:
+        log(f"  [ERROR] merge_sources failed: {e}")
 
     # 11. Validate
-    validate_data(all_data)
+    try:
+        validate_data(all_data)
+    except Exception as e:
+        log(f"  [ERROR] validate_data failed: {e}")
 
-    # Summary
-    log("\n" + "=" * 60)
-    log(f"Collection complete: {len(all_data)} series")
-    for name in sorted(all_data.keys()):
-        s = all_data[name]
-        if isinstance(s, pd.Series) and not s.empty:
-            log(f"  {name}: {len(s)} pts ({s.index[0].strftime('%Y-%m-%d')} to {s.index[-1].strftime('%Y-%m-%d')}), last={s.iloc[-1]:.4f}")
-    log("=" * 60)
+    # Summary (wrapped in try/except to never crash)
+    try:
+        log("\n" + "=" * 60)
+        log(f"Collection complete: {len(all_data)} series")
+        for name in sorted(all_data.keys()):
+            s = all_data[name]
+            if isinstance(s, pd.Series) and not s.empty:
+                try:
+                    log(f"  {name}: {len(s)} pts ({s.index[0].strftime('%Y-%m-%d')} to {s.index[-1].strftime('%Y-%m-%d')}), last={s.iloc[-1]:.4f}")
+                except Exception:
+                    log(f"  {name}: {len(s)} pts (format error)")
+        log("=" * 60)
+    except Exception as e:
+        log(f"  [ERROR] Summary failed: {e}")
 
     return all_data
 

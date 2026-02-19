@@ -115,3 +115,4 @@ server/model/output/
 # Model data files (generated at runtime)
 server/model/data/
 server/model/output/
+__pycache__/
