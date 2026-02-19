@@ -430,10 +430,10 @@ class MarketImpliedRStar:
                         # Expected 5Y yield from model
                         expected_5y = mean_yields[col_idx] + float(loadings[:, col_idx] @ current_factors)
                         # Term premium = actual - expected
-                        actual_5y = window_data.iloc[-1][col_idx] if col_idx < len(window_data.columns) else 0
+                        actual_5y = window_data.iloc[-1].iloc[col_idx] if col_idx < len(window_data.columns) else 0
                         tp_5y.iloc[i] = actual_5y - expected_5y
 
-            except (np.linalg.LinAlgError, ValueError, IndexError, TypeError, ZeroDivisionError):
+            except (np.linalg.LinAlgError, ValueError, IndexError, TypeError, ZeroDivisionError, KeyError):
                 continue
 
         rstar = rstar.dropna()
