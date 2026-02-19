@@ -1,0 +1,169 @@
+name: BRLUSD Model Run (GPU Accelerated)
+
+# This workflow splits the pipeline:
+#   1. Data Collection runs on GH Actions (cheap, network-heavy)
+#   2. Model Execution runs on DO GPU Droplet via SSH (compute-heavy)
+#
+# Prerequisites:
+#   - Repository secret: DO_GPU_SSH_KEY (private key for the DO droplet)
+#   - Repository secret: DO_GPU_HOST (IP or hostname of the DO GPU droplet)
+#   - Repository secret: DO_GPU_USER (SSH user, usually 'root')
+#   - Repository secret: MANUS_WEBHOOK_SECRET
+#   - Repository secret: MANUS_DASHBOARD_URL
+#   - The DO droplet must have the repo cloned at /opt/ARC_Macro
+#   - Python 3.11+ with all dependencies installed on the droplet
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_collect:
+        description: 'Skip data collection (use cached data on GPU droplet)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+  REMOTE_REPO_PATH: '/opt/ARC_Macro'
+
+jobs:
+  # ── Phase 1: Data Collection (GH Actions) ────────────────────
+  collect-data:
+    name: Collect Market Data
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event.inputs.skip_collect != 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: server/model/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r server/model/requirements.txt
+
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: server/model/data
+          key: model-data-gpu-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            model-data-gpu-${{ runner.os }}-
+
+      - name: Collect market data
+        working-directory: server/model
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          python3.11 -c "
+          import sys, warnings
+          warnings.filterwarnings('ignore')
+          from data_collector import collect_all
+          try:
+              data = collect_all()
+              n = len(data) if isinstance(data, dict) else 0
+              print(f'[COLLECT] Completed: {n} series', file=sys.stderr)
+          except Exception as e:
+              print(f'[COLLECT] Error: {e}', file=sys.stderr)
+          "
+
+      - name: Package data for GPU droplet
+        run: |
+          cd server/model
+          CSV_COUNT=$(ls data/*.csv 2>/dev/null | wc -l)
+          echo "Packaging $CSV_COUNT CSV files..."
+          tar -czf ${{ runner.temp }}/model_data.tar.gz -C data .
+          DATA_SIZE=$(stat -c%s "${{ runner.temp }}/model_data.tar.gz")
+          echo "Data archive: ${DATA_SIZE} bytes"
+
+      - name: Upload data archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-data
+          path: ${{ runner.temp }}/model_data.tar.gz
+          retention-days: 1
+
+  # ── Phase 2: Model Execution (DO GPU Droplet) ────────────────
+  run-model-gpu:
+    name: Run Model on GPU
+    runs-on: ubuntu-latest
+    needs: [collect-data]
+    if: always() && (needs.collect-data.result == 'success' || github.event.inputs.skip_collect == 'true')
+    timeout-minutes: 120
+
+    steps:
+      - name: Download data archive
+        if: ${{ github.event.inputs.skip_collect != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: model-data
+          path: ${{ runner.temp }}
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DO_GPU_SSH_KEY }}" > ~/.ssh/do_gpu
+          chmod 600 ~/.ssh/do_gpu
+          ssh-keyscan -H ${{ secrets.DO_GPU_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Transfer data to GPU droplet
+        if: ${{ github.event.inputs.skip_collect != 'true' }}
+        run: |
+          echo "Transferring data to GPU droplet..."
+          scp -i ~/.ssh/do_gpu \
+            ${{ runner.temp }}/model_data.tar.gz \
+            ${{ secrets.DO_GPU_USER }}@${{ secrets.DO_GPU_HOST }}:/tmp/model_data.tar.gz
+          echo "Data transferred successfully"
+
+      - name: Run model on GPU droplet
+        id: run_model
+        env:
+          MANUS_WEBHOOK_SECRET: ${{ secrets.MANUS_WEBHOOK_SECRET }}
+          MANUS_DASHBOARD_URL: ${{ secrets.MANUS_DASHBOARD_URL }}
+        run: |
+          START_TIME=$(date +%s)
+          
+          # Build the remote command
+          DATA_FLAG=""
+          if [ "${{ github.event.inputs.skip_collect }}" != "true" ]; then
+            DATA_FLAG="--data-tar /tmp/model_data.tar.gz"
+          fi
+          
+          ssh -i ~/.ssh/do_gpu \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=30 \
+            ${{ secrets.DO_GPU_USER }}@${{ secrets.DO_GPU_HOST }} \
+            "cd ${{ env.REMOTE_REPO_PATH }}/server/model && \
+             export MANUS_WEBHOOK_SECRET='${MANUS_WEBHOOK_SECRET}' && \
+             export MANUS_DASHBOARD_URL='${MANUS_DASHBOARD_URL}' && \
+             bash do_gpu_runner.sh ${DATA_FLAG}"
+          
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "GPU model execution: ${DURATION}s ($(( DURATION / 60 ))m)"
+          echo "duration=${DURATION}" >> $GITHUB_OUTPUT
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ~/.ssh/do_gpu
+
+      - name: Post run summary
+        if: always()
+        run: |
+          echo "## 🏦 ARC Macro Risk OS — GPU Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Execution Mode** | GPU (DO Droplet) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **GPU Duration** | ${{ steps.run_model.outputs.duration || 'N/A' }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Data Collection** | ${{ github.event.inputs.skip_collect == 'true' && 'Skipped' || 'GH Actions' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY

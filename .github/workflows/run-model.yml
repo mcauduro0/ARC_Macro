@@ -39,6 +39,62 @@ jobs:
           pip install --upgrade pip
           pip install -r server/model/requirements.txt
 
+      # ── Data Cache ──────────────────────────────────────────────
+      # Cache CSV data files between runs. Key rotates daily so fresh
+      # data is fetched once per day, but subsequent re-runs reuse it.
+      # restore-keys falls back to yesterday's cache for a warm start.
+      - name: Restore data cache
+        id: data_cache
+        uses: actions/cache@v4
+        with:
+          path: server/model/data
+          key: model-data-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            model-data-${{ runner.os }}-
+
+      - name: Log cache status
+        run: |
+          CACHED_FILES=$(ls server/model/data/*.csv 2>/dev/null | wc -l)
+          echo "Cache hit: ${{ steps.data_cache.outputs.cache-hit }}"
+          echo "Cached CSV files: ${CACHED_FILES}"
+          if [ "${CACHED_FILES}" -gt 0 ]; then
+            echo "::notice::Restored ${CACHED_FILES} cached CSV files — only deltas will be fetched"
+          fi
+
+      # ── Data Collection ─────────────────────────────────────────
+      - name: Collect market data
+        id: collect_data
+        if: ${{ github.event.inputs.skip_collect != 'true' }}
+        working-directory: server/model
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          echo "::group::Data Collection"
+          START_COL=$(date +%s)
+          
+          python3.11 -c "
+          import sys, warnings
+          warnings.filterwarnings('ignore')
+          from data_collector import collect_all
+          try:
+              data = collect_all()
+              n = len(data) if isinstance(data, dict) else 0
+              print(f'[COLLECT] Completed: {n} series', file=sys.stderr)
+          except Exception as e:
+              print(f'[COLLECT] Error: {e}', file=sys.stderr)
+          " 2>&1 | tee ${{ runner.temp }}/collect_stderr.log
+          
+          END_COL=$(date +%s)
+          COL_DURATION=$((END_COL - START_COL))
+          echo "::endgroup::"
+          
+          SERIES_COUNT=$(ls data/*.csv 2>/dev/null | wc -l)
+          echo "Collection duration: ${COL_DURATION}s ($(( COL_DURATION / 60 ))m)"
+          echo "CSV files: ${SERIES_COUNT}"
+          echo "collect_duration=${COL_DURATION}" >> $GITHUB_OUTPUT
+          echo "series_count=${SERIES_COUNT}" >> $GITHUB_OUTPUT
+
+      # ── Model Execution ─────────────────────────────────────────
       - name: Run ARC Macro Risk OS model
         id: run_model
         working-directory: server/model
@@ -48,13 +104,8 @@ jobs:
           echo "::group::Model Execution"
           START_TIME=$(date +%s)
           
-          # Run the model, capture JSON stdout, log stderr
-          ARGS=""
-          if [ "${{ github.event.inputs.skip_collect }}" = "true" ]; then
-            ARGS="--skip-collect"
-          fi
-          
-          python3.11 run_model.py $ARGS \
+          # Always skip collection in run_model.py since we collected above
+          python3.11 run_model.py --skip-collect \
             > ${{ runner.temp }}/model_output.json \
             2> >(tee ${{ runner.temp }}/model_stderr.log >&2)
           
@@ -79,7 +130,8 @@ jobs:
           echo "duration=${DURATION}" >> $GITHUB_OUTPUT
           echo "output_size=${OUTPUT_SIZE}" >> $GITHUB_OUTPUT
 
-      - name: Upload model output to Manus S3
+      # ── Upload Results ──────────────────────────────────────────
+      - name: Upload model output to Manus dashboard
         id: upload_s3
         env:
           MANUS_WEBHOOK_SECRET: ${{ secrets.MANUS_WEBHOOK_SECRET }}
@@ -113,6 +165,7 @@ jobs:
             echo "upload_success=false" >> $GITHUB_OUTPUT
           fi
 
+      # ── Artifacts & Summary ─────────────────────────────────────
       - name: Save model output as artifact (backup)
         if: always()
         uses: actions/upload-artifact@v4
@@ -121,6 +174,7 @@ jobs:
           path: |
             ${{ runner.temp }}/model_output.json
             ${{ runner.temp }}/model_stderr.log
+            ${{ runner.temp }}/collect_stderr.log
           retention-days: 30
 
       - name: Post run summary
@@ -130,7 +184,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Duration** | ${{ steps.run_model.outputs.duration }}s ($(( ${{ steps.run_model.outputs.duration || 0 }} / 60 ))m) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Data Collection** | ${{ steps.collect_data.outputs.collect_duration || 'skipped' }}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| **CSV Series** | ${{ steps.collect_data.outputs.series_count || 'cached' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Cache Hit** | ${{ steps.data_cache.outputs.cache-hit || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Model Duration** | ${{ steps.run_model.outputs.duration }}s ($(( ${{ steps.run_model.outputs.duration || 0 }} / 60 ))m) |" >> $GITHUB_STEP_SUMMARY
           echo "| **Output Size** | ${{ steps.run_model.outputs.output_size }} bytes |" >> $GITHUB_STEP_SUMMARY
           echo "| **Dashboard Upload** | ${{ steps.upload_s3.outputs.upload_success || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Trigger** | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
