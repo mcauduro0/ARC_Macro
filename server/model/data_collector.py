@@ -465,6 +465,8 @@ def collect_fred():
         "US_TIPS_10Y":      "DFII10",
         "US_IP":            "INDPRO",
         "US_CPI_EXP":       "MICH",
+        "EMBI_FRED_LATAM":  "BAMLEMRLCRPILAOAS",
+        "EMBI_FRED_EM":     "BAMLEMCBPIOAS",
     }
     result = {}
     for name, sid in mapping.items():
@@ -564,7 +566,7 @@ def collect_yahoo():
 # BCB SGS (with cache fallback)
 # ═══════════════════════════════════════════════════════════════════
 
-def fetch_bcb(code, name, start_year=2000):
+def fetch_bcb(code, name, start_year=2010):
     """Fetch BCB SGS series with chunking and retry logic.
     v2.3.1: Added retry per chunk, gap detection, and merge with cache.
     """
@@ -677,9 +679,7 @@ def collect_bcb():
         "SWAP_DIXDOL_360D":  7814,   # Swap DI x Dólar 360 dias (1995-present)
         # Also keep cupom cambial limpo 30d (3954) as cross-validation
         "FX_CUPOM_LIMPO_30D": 3954,  # Cupom cambial limpo 30 dias (1994-2024)
-        # Legacy series for backward compat (will be empty after 2012)
-        "FX_CUPOM_1M":       3955,
-        "FX_CUPOM_3M":       3956,
+        # NOTE: Legacy series 3955/3956 removed (discontinued since 2012, always empty)
     }
     result = {}
     for name, code in mapping.items():
@@ -701,7 +701,7 @@ def fetch_ipeadata(code, name):
     """Fetch IPEADATA series."""
     try:
         url = f"http://www.ipeadata.gov.br/api/odata4/ValoresSerie(SERCODIGO='{code}')"
-        r = requests.get(url, params={"$format": "json"}, timeout=TIMEOUT)
+        r = requests.get(url, params={"$format": "json"}, timeout=10)  # Reduced timeout: IPEADATA unreliable, FRED fallback available
         r.raise_for_status()
         data = r.json().get('value', [])
         if data:
@@ -867,7 +867,7 @@ def collect_structural():
     # Source 1: BCB SGS 11752 (Taxa de Câmbio Real Efetiva - IPCA)
     try:
         reer_data = []
-        for sy in range(2000, 2027, 5):
+        for sy in range(2010, 2027, 5):
             ey = min(sy + 4, 2026)
             url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.11752/dados?formato=json&dataInicial=01/01/{sy}&dataFinal=31/12/{ey}"
             r = requests.get(url, timeout=TIMEOUT)
@@ -1299,42 +1299,85 @@ def merge_sources(all_data):
                 all_data[fred_key] = all_data[fmp_key]
                 log(f"  {fred_key}: fallback to FMP")
 
-    # EMBI: prefer IPEADATA (daily), extend with FRED if stale
-    if "EMBI_SPREAD" not in all_data or all_data["EMBI_SPREAD"].empty:
-        if "EMBI_PLUS_IPEA" in all_data:
-            all_data["EMBI_SPREAD"] = all_data["EMBI_PLUS_IPEA"]
+    # ── EMBI Fallback Chain: IPEADATA → FRED LatAm EM → FRED EM Corp → cache ──
+    embi_source = None
 
-    # v2.3.1: Extend EMBI with FRED EM Corporate spread if IPEADATA is stale
+    # Step 1: Try IPEADATA (primary, daily EMBI Brazil)
     if "EMBI_SPREAD" in all_data and not all_data["EMBI_SPREAD"].empty:
         embi = all_data["EMBI_SPREAD"]
         embi = embi[(embi > 50) & (embi < 2000)]  # Filter valid values
-        all_data["EMBI_SPREAD"] = embi
-        # Check if EMBI is stale (> 60 days old)
-        if (pd.Timestamp.now() - embi.index[-1]).days > 60:
+        if not embi.empty:
+            all_data["EMBI_SPREAD"] = embi
+            embi_source = "IPEADATA"
+            log(f"  EMBI_SPREAD: IPEADATA primary, {len(embi)} pts, last={embi.iloc[-1]:.0f} bps")
+    elif "EMBI_PLUS_IPEA" in all_data and not all_data["EMBI_PLUS_IPEA"].empty:
+        embi = all_data["EMBI_PLUS_IPEA"]
+        embi = embi[(embi > 50) & (embi < 2000)]
+        if not embi.empty:
+            all_data["EMBI_SPREAD"] = embi
+            embi_source = "IPEADATA"
+            log(f"  EMBI_SPREAD: IPEADATA alt, {len(embi)} pts")
+
+    # Step 2: If IPEADATA failed/empty, use FRED LatAm EM as proxy (calibrated to EMBI Brazil)
+    if embi_source is None:
+        # FRED LatAm EM Corp OAS (BAMLEMRLCRPILAOAS) - best proxy, Brazil ~40% of index
+        # Values are in % (e.g., 2.68 = 268 bps). Historical ratio EMBI_BR/LatAm ≈ 0.85
+        fred_latam = all_data.get("EMBI_FRED_LATAM")
+        if fred_latam is not None and isinstance(fred_latam, pd.Series) and not fred_latam.empty:
+            embi_proxy = fred_latam * 100 * 0.85  # % → bps, calibrated to Brazil
+            embi_proxy = embi_proxy[(embi_proxy > 50) & (embi_proxy < 2000)]
+            if not embi_proxy.empty:
+                all_data["EMBI_SPREAD"] = embi_proxy
+                save_series(embi_proxy, 'EMBI_SPREAD')
+                embi_source = "FRED_LATAM"
+                log(f"  EMBI_SPREAD: FRED LatAm EM proxy (×0.85), {len(embi_proxy)} pts, last={embi_proxy.iloc[-1]:.0f} bps")
+
+    # Step 3: If LatAm also failed, use broader FRED EM Corp OAS
+    if embi_source is None:
+        fred_em = all_data.get("EMBI_FRED_EM")
+        if fred_em is not None and isinstance(fred_em, pd.Series) and not fred_em.empty:
+            # EMBI Brazil / EM Corp OAS historical ratio ≈ 1.30
+            embi_proxy = fred_em * 100 * 1.30  # % → bps, calibrated to Brazil
+            embi_proxy = embi_proxy[(embi_proxy > 50) & (embi_proxy < 2000)]
+            if not embi_proxy.empty:
+                all_data["EMBI_SPREAD"] = embi_proxy
+                save_series(embi_proxy, 'EMBI_SPREAD')
+                embi_source = "FRED_EM"
+                log(f"  EMBI_SPREAD: FRED EM Corp proxy (×1.30), {len(embi_proxy)} pts, last={embi_proxy.iloc[-1]:.0f} bps")
+
+    # Step 4: Last resort - load from cache
+    if embi_source is None:
+        cached = load_cached('EMBI_SPREAD')
+        if not cached.empty:
+            all_data["EMBI_SPREAD"] = cached
+            embi_source = "CACHE"
+            log(f"  EMBI_SPREAD: CACHE fallback, {len(cached)} pts")
+        else:
+            log(f"  EMBI_SPREAD: ALL SOURCES FAILED - no data available")
+
+    # Step 5: If IPEADATA exists but is stale, extend with FRED
+    if embi_source == "IPEADATA" and "EMBI_SPREAD" in all_data:
+        embi = all_data["EMBI_SPREAD"]
+        if not embi.empty and (pd.Timestamp.now() - embi.index[-1]).days > 30:
             log(f"  EMBI_SPREAD: stale ({embi.index[-1].strftime('%Y-%m-%d')}), extending with FRED")
             try:
-                url = f"https://api.stlouisfed.org/fred/series/observations?series_id=BAMLEMCBPIOAS&api_key={FRED_KEY}&file_type=json&observation_start=2020-01-01"
-                r = requests.get(url, timeout=TIMEOUT)
-                if r.status_code == 200:
-                    obs = r.json().get('observations', [])
-                    records = [(o['date'], float(o['value'])) for o in obs if o['value'] != '.']
-                    df = pd.DataFrame(records, columns=['date', 'value'])
-                    df['date'] = pd.to_datetime(df['date'])
-                    fred_em = df.set_index('date')['value'].sort_index() * 100  # % to bps
-                    # Compute ratio in overlap period
+                fred_ext = all_data.get("EMBI_FRED_LATAM")
+                if fred_ext is not None and not fred_ext.empty:
+                    fred_bps = fred_ext * 100 * 0.85
+                    # Compute ratio in overlap period for better calibration
                     embi_m = embi.resample('ME').last().dropna()
-                    fred_m = fred_em.resample('ME').last().dropna()
+                    fred_m = fred_bps.resample('ME').last().dropna()
                     common = embi_m.index.intersection(fred_m.index)
                     common = common[common <= embi.index[-1]]
                     if len(common) > 6:
                         ratio = (embi_m.reindex(common) / fred_m.reindex(common)).median()
-                        fred_after = fred_em[fred_em.index > embi.index[-1]]
+                        fred_after = fred_bps[fred_bps.index > embi.index[-1]]
                         extension = fred_after * ratio
                         embi_ext = pd.concat([embi, extension]).sort_index()
                         embi_ext = embi_ext[~embi_ext.index.duplicated(keep='last')]
                         all_data["EMBI_SPREAD"] = embi_ext
                         save_series(embi_ext, 'EMBI_SPREAD')
-                        log(f"  EMBI_SPREAD: extended with FRED (ratio={ratio:.4f}), now {len(embi_ext)} pts to {embi_ext.index[-1].strftime('%Y-%m-%d')}")
+                        log(f"  EMBI_SPREAD: extended with FRED LatAm (ratio={ratio:.4f}), now {len(embi_ext)} pts")
             except Exception as e:
                 log(f"  EMBI_SPREAD: FRED extension failed: {e}")
 
