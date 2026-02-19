@@ -1226,15 +1226,37 @@ def merge_sources(all_data):
     else:
         log(f"  WARNING: No IPCA monthly data available for 12M computation")
 
-    # ANBIMA → Trading Economics → SELIC construction priority for DI curve
-    # Use ANBIMA ETTJ as primary source for DI curve if available
+    # DI Curve: TE historical series + ANBIMA snapshot for latest value
+    # Trading Economics provides 3000+ daily historical points
+    # ANBIMA provides today's official ETTJ snapshot (1 point)
+    # Strategy: use TE as base, append/update with ANBIMA's latest value
     for tenor in ['DI_3M', 'DI_6M', 'DI_1Y', 'DI_2Y', 'DI_3Y', 'DI_5Y', 'DI_10Y']:
-        anbima_key = tenor  # ANBIMA data stored with same key prefix
-        if anbima_key in all_data and not all_data[anbima_key].empty:
-            log(f"  {tenor}: using ANBIMA ETTJ ({all_data[anbima_key].iloc[-1]:.2f}%)")
-        # If ANBIMA not available but TE is, TE was already loaded
-        elif tenor in all_data and not all_data[tenor].empty:
-            log(f"  {tenor}: using Trading Economics ({all_data[tenor].iloc[-1]:.2f}%)")
+        anbima_key = f'ANBIMA_{tenor}'
+        has_te = tenor in all_data and not all_data[tenor].empty and len(all_data[tenor]) > 1
+        has_anbima = anbima_key in all_data and not all_data[anbima_key].empty
+        
+        if has_te and has_anbima:
+            # Combine: TE historical + ANBIMA latest point
+            te_series = all_data[tenor]
+            anbima_series = all_data[anbima_key]
+            anbima_date = anbima_series.index[0]
+            anbima_val = anbima_series.iloc[0]
+            # Append ANBIMA point if it's newer than TE's last date
+            if anbima_date > te_series.index[-1]:
+                combined = pd.concat([te_series, pd.Series([anbima_val], index=[anbima_date])])
+                all_data[tenor] = combined
+                log(f"  {tenor}: TE historical ({len(te_series)} pts) + ANBIMA latest ({anbima_val:.2f}%)")
+            else:
+                # ANBIMA date already in TE range, just update that point
+                te_series.loc[anbima_date] = anbima_val
+                all_data[tenor] = te_series.sort_index()
+                log(f"  {tenor}: TE historical ({len(te_series)} pts), ANBIMA updated ({anbima_val:.2f}%)")
+        elif has_te:
+            log(f"  {tenor}: using Trading Economics ({len(all_data[tenor])} pts, last={all_data[tenor].iloc[-1]:.2f}%)")
+        elif has_anbima:
+            # Only ANBIMA available (1 point) - use it but warn
+            all_data[tenor] = all_data[anbima_key]
+            log(f"  {tenor}: ANBIMA only (1 pt, {all_data[anbima_key].iloc[-1]:.2f}%) - insufficient for models")
 
     # Use ANBIMA NTN-B bond yields as primary for real yields
     for target, anbima_key in [('NTNB_5Y', 'ANBIMA_NTNB_BOND_5Y'), ('NTNB_10Y', 'ANBIMA_NTNB_BOND_10Y')]:
@@ -1470,13 +1492,21 @@ def collect_all():
     anbima_data = {}  # Store ANBIMA separately to preserve as primary
     errors = []
 
-    # 0. ANBIMA Feed API (PRIMARY for BR rates - ETTJ + NTN-B/NTN-F)
+    # 0. ANBIMA Feed API (snapshot for BR rates - ETTJ + NTN-B/NTN-F)
+    # ANBIMA returns single-day snapshots; store with ANBIMA_ prefix
+    # Trading Economics provides the historical series (primary)
     try:
         anbima_data = collect_anbima()
         if isinstance(anbima_data, dict):
+            di_tenors = {'DI_3M', 'DI_6M', 'DI_1Y', 'DI_2Y', 'DI_3Y', 'DI_5Y', 'DI_10Y'}
             for k, v in anbima_data.items():
                 if isinstance(v, pd.Series):
-                    all_data[k] = v
+                    if k in di_tenors:
+                        # Store DI tenors with ANBIMA_ prefix (single-day snapshot)
+                        all_data[f'ANBIMA_{k}'] = v
+                    else:
+                        # Non-DI series (NTN-B, breakevens) keep original key
+                        all_data[k] = v
         else:
             log(f"  [WARN] ANBIMA returned {type(anbima_data).__name__} instead of dict")
             anbima_data = {}
@@ -1485,17 +1515,15 @@ def collect_all():
         errors.append(('ANBIMA', str(e)))
         anbima_data = {}
 
-    # 1. DI Curve from Trading Economics (FALLBACK for BR rates)
+    # 1. DI Curve from Trading Economics (PRIMARY historical series)
     try:
         te_data = collect_di_curve()
         if isinstance(te_data, dict):
             for key, val in te_data.items():
                 if isinstance(val, pd.Series):
-                    if key not in anbima_data:
-                        all_data[key] = val
-                    else:
-                        all_data[f'TE_{key}'] = val
-                        log(f"  {key}: ANBIMA primary, TE stored as TE_{key}")
+                    all_data[key] = val  # TE is always the primary historical series
+                    # Also store with TE_ prefix for reference
+                    all_data[f'TE_{key}'] = val
     except Exception as e:
         log(f"  [ERROR] DI Curve (TE) failed: {e}")
         errors.append(('DI_CURVE', str(e)))
