@@ -66,6 +66,20 @@ def test_sharpe_stats_dsr_deflates_with_more_trials():
     assert few["dsr"] >= many["dsr"]  # deflation is monotone in trial count
 
 
+def test_sharpe_stats_auto_sr_std_is_per_period_not_annual():
+    """Units guard (regression for the adversarial-review bug): the default sr_std must be the
+    per-period Sharpe SE (~sqrt(1/n)), NOT 1.0. With sr_std=1.0 the DSR of a healthy monthly Sharpe
+    collapses to ~0 (impossible benchmark); with the auto default it is a sane, non-degenerate value."""
+    rng = np.random.default_rng(11)
+    r = rng.normal(0.012, 0.03, size=138)  # ~Sharpe 0.8 annualized, like the overlay
+    auto = sharpe_stats(r, n_trials=30)              # auto sr_std
+    buggy = sharpe_stats(r, n_trials=30, sr_std=1.0)  # the old default
+    assert 0.0 < auto["sr_std"] < 0.3                 # per-period scale
+    assert auto["dsr"] > 0.2                           # not spuriously zero
+    assert buggy["dsr"] < 1e-6                          # the bug: over-deflated to ~0
+    assert auto["dsr"] > buggy["dsr"]
+
+
 def test_cpcv_ic_reports_paths():
     rng = np.random.default_rng(5)
     pred = rng.normal(size=120)
