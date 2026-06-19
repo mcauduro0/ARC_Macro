@@ -116,3 +116,14 @@ server/model/output/
 server/model/data/
 server/model/output/
 __pycache__/
+
+# Python tooling / build / venv (Phase 0)
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.venv/
+venv/
+.coverage
+htmlcov/
