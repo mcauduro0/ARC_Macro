@@ -63,7 +63,8 @@ def main() -> None:
     import macro_risk_os_v2 as eng
 
     n_trials = int(os.environ.get("ARC_GATE_TRIALS", "30"))
-    sr_std = float(os.environ.get("ARC_GATE_SR_STD", "1.0"))
+    _sr_std_env = os.environ.get("ARC_GATE_SR_STD", "auto")  # 'auto' => Lo (2002) per-period Sharpe SE
+    sr_std = None if _sr_std_env.lower() == "auto" else float(_sr_std_env)
 
     print("[gate] running walk-forward backtest with causal fixes ON ...", file=sys.stderr)
     harness = eng.BacktestHarness(eng.DEFAULT_CONFIG)

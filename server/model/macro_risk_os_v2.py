@@ -53,6 +53,22 @@ def _forward_target(ret_series, horizon=1):
         return ret_series
     return _arc_forward_returns(ret_series, horizon)
 
+
+def _select_covered_features(X, min_cov):
+    """Drop feature columns with < ``min_cov`` non-NaN values in the as-of window BEFORE the
+    complete-case dropna. One short-history feature (e.g. Z_hy_spread, 8 months) otherwise wipes out
+    nearly every row in the per-row dropna and SILENTLY skips the instrument — the same global-dropna
+    disease as the regime model (audit P6). This is causal: coverage is measured only on data up to
+    asof. Returns (filtered_X, kept_columns); no-op if <2 columns would remain or via
+    ARC_FEAT_PER_SERIES=0. min_cov is clipped so the filter never demands more than the row floor."""
+    if os.environ.get("ARC_FEAT_PER_SERIES", "1") == "0":
+        return X, list(X.columns)
+    cov = X.notna().sum()
+    keep = cov[cov >= min_cov].index.tolist()
+    if len(keep) < 2:
+        return X, list(X.columns)
+    return X[keep], keep
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -1809,6 +1825,7 @@ class AlphaModels:
             # is dropped below — no leakage.
             y = _forward_target(ret_df[inst], self.cfg.get('prediction_horizon_months', 1)).loc[:asof_date]
             X = feat_df[available_feats].loc[:asof_date]
+            X, available_feats = _select_covered_features(X, min(self.cfg.get('min_training_months', 60), 36))
 
             # Align indices
             common = y.index.intersection(X.index)
@@ -2009,6 +2026,10 @@ class EnsembleAlphaModels:
             # is dropped below — no leakage.
             y = _forward_target(ret_df[inst], self.cfg.get('prediction_horizon_months', 1)).loc[:asof_date]
             X = feat_df[available_feats].loc[:asof_date]
+            # Per-series feature coverage filter (fixes fx/hard degeneracy): drop short-history
+            # features before the complete-case dropna so they don't collapse the training set and
+            # silently skip the instrument. See _select_covered_features.
+            X, available_feats = _select_covered_features(X, min(self.cfg.get('min_training_months', 60), 36))
             common = y.index.intersection(X.index)
             y = y.reindex(common).dropna()
             X = X.reindex(y.index).dropna()
@@ -2652,9 +2673,28 @@ class RegimeModel:
             log(f"  {level_name}: Insufficient observables ({len(obs_dict)})")
             return None
 
-        obs_df = pd.DataFrame(obs_dict).dropna()
+        obs_df = pd.DataFrame(obs_dict)
         if asof_date is not None:
             obs_df = obs_df.loc[:asof_date]
+
+        # P6 fix: per-series alignment instead of a GLOBAL dropna. A late-starting observable
+        # (e.g. us_hy_spread from 2023) would otherwise wipe out every pre-2023 row and collapse the
+        # regime to a uniform prior for most of history. Keep only observables with enough coverage
+        # in the as-of window (causal: judged on data up to asof), THEN drop incomplete rows on that
+        # subset — so the HMM fits on the long-history observables. ARC_REGIME_PER_SERIES=0 restores
+        # the legacy global dropna (measurement only).
+        MIN_OBS = 60
+        if os.environ.get("ARC_REGIME_PER_SERIES", "1") == "0":
+            obs_df = obs_df.dropna()
+        elif obs_df.shape[1] > 0:
+            coverage = obs_df.notna().sum()
+            keep = coverage[coverage >= MIN_OBS].index.tolist()
+            if len(keep) < 2:  # too strict this early — fall back to the best-covered observables
+                keep = coverage.sort_values(ascending=False).head(min(3, obs_df.shape[1])).index.tolist()
+            dropped = [c for c in obs_df.columns if c not in keep]
+            if dropped:
+                log(f"    {level_name}: excluding sparse observables {dropped} (<{MIN_OBS} obs at as-of)")
+            obs_df = obs_df[keep].dropna()
 
         if len(obs_df) < 60:
             log(f"  {level_name}: Insufficient data ({len(obs_df)} months)")
@@ -3044,6 +3084,7 @@ class ProductionEngine:
                         continue
                     y = ret_df[inst].loc[:asof_date]
                     X = feat_df[available_feats].loc[:asof_date]
+                    X, available_feats = _select_covered_features(X, 60)  # CV needs >=60 rows
                     common = y.index.intersection(X.index)
                     y = y.reindex(common).dropna()
                     X = X.reindex(y.index).dropna()

@@ -106,17 +106,24 @@ def carry_only_portfolio(carry_panel: pd.DataFrame, realized_panel: pd.DataFrame
     return (w * r).sum(axis=1)
 
 
-def sharpe_stats(returns, n_trials: int, sr_std: float = 1.0, periods_per_year: int = 12) -> dict:
+def sharpe_stats(returns, n_trials: int, sr_std: Optional[float] = None, periods_per_year: int = 12) -> dict:
     """Per-period Sharpe with PSR (vs 0) and DSR (deflated by ``n_trials``). ``returns`` are
-    per-period (monthly) overlay returns; ``sr_std`` is the across-trials Sharpe dispersion."""
+    per-period (monthly) overlay returns.
+
+    ``sr_std`` is the across-trials Sharpe DISPERSION, in the SAME per-period units as the Sharpe
+    being deflated. It must NOT be left at an annualized-looking 1.0: a per-period Sharpe (~0.24
+    monthly) deflated with sr_std=1.0 implies E[max Sharpe over N trials] ~2/period (~7 annualized),
+    an impossible benchmark that collapses DSR to ~0 (a units bug found in adversarial review). When
+    not supplied we default to the Lo (2002) Sharpe sampling SE under H0, sqrt((1 + sr^2/2)/n), the
+    per-period dispersion of zero-true-Sharpe trial estimates — the standard deflation baseline."""
     from scipy.stats import kurtosis, skew
 
     a = np.asarray(returns, dtype="float64")
     a = a[~np.isnan(a)]
     n = len(a)
     nan = {"sr_period": float("nan"), "sr_annual": float("nan"), "n": n,
-           "n_trials": n_trials, "psr_vs_0": float("nan"), "dsr": float("nan"),
-           "skew": float("nan"), "kurt": float("nan")}
+           "n_trials": n_trials, "sr_std": float("nan"), "psr_vs_0": float("nan"),
+           "dsr": float("nan"), "skew": float("nan"), "kurt": float("nan")}
     if n < 6:
         return nan
     sd = a.std(ddof=1)
@@ -125,13 +132,15 @@ def sharpe_stats(returns, n_trials: int, sr_std: float = 1.0, periods_per_year: 
     sr = a.mean() / sd
     sk = float(skew(a))
     ku = float(kurtosis(a, fisher=False))  # non-excess (normal = 3)
+    sr_std_eff = float(np.sqrt((1.0 + 0.5 * sr ** 2) / n)) if sr_std is None else float(sr_std)
     return {
         "sr_period": float(sr),
         "sr_annual": float(sr * np.sqrt(periods_per_year)),
         "n": n,
         "n_trials": int(n_trials),
+        "sr_std": sr_std_eff,
         "psr_vs_0": float(probabilistic_sharpe_ratio(sr, n, sk, ku, 0.0)),
-        "dsr": float(deflated_sharpe_ratio(sr, n, n_trials, sr_std, skew=sk, kurt=ku)),
+        "dsr": float(deflated_sharpe_ratio(sr, n, n_trials, sr_std_eff, skew=sk, kurt=ku)),
         "skew": sk,
         "kurt": ku,
     }
@@ -178,7 +187,7 @@ def promotion_report(
     carry_panel: pd.DataFrame,
     overlay_returns,
     n_trials: int,
-    sr_std: float = 1.0,
+    sr_std: Optional[float] = None,
     trial_perf_matrix: Optional[np.ndarray] = None,
     thresholds: Optional[GateThresholds] = None,
 ) -> GateVerdict:
