@@ -17,7 +17,8 @@ def make_series(n: int = 120, *, future_shock: bool = False, seed: int = 7) -> p
     idx = pd.date_range("2010-01-31", periods=n, freq="ME")
     x = pd.Series(rng.standard_normal(n), index=idx).cumsum() * 0.3
     if future_shock:
-        x.iloc[-n // 3:] += rng.standard_normal(n // 3) * 12.0  # large future outliers
+        k = n // 3  # NB: -n // 3 == (-n)//3 != -(n//3) for n not divisible by 3
+        x.iloc[-k:] += rng.standard_normal(k) * 12.0  # large future outliers
     return x
 
 

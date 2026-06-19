@@ -33,9 +33,11 @@ warnings.filterwarnings('ignore')
 # look-ahead (audit feat-1). Path fallback so it resolves when run from server/model.
 try:
     from arc.causal import causal_winsorize as _causal_winsorize
+    from arc.features import rolling_zscore as _arc_rolling_zscore
 except Exception:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
     from arc.causal import causal_winsorize as _causal_winsorize
+    from arc.features import rolling_zscore as _arc_rolling_zscore
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -695,14 +697,12 @@ class FeatureEngine:
         return self
 
     def _z_score_rolling(self, series, window=None, floor=None):
-        """Rolling Z-score with floor on std."""
+        """Rolling Z-score with floor on std. Logic extracted to arc.features.rolling_zscore
+        (strangler-fig); the engine injects its own (toggle-aware causal) winsorize so behavior
+        is identical — verified by the shadow-diff in tests/test_extract_zscore.py."""
         w = window or self.cfg['standardization_window_months']
         f = floor or self.cfg['std_floor']
-        mean_r = series.rolling(w, min_periods=max(24, w // 2)).mean()
-        std_r = series.rolling(w, min_periods=max(24, w // 2)).std()
-        std_r = std_r.clip(lower=f)
-        z = (series - mean_r) / std_r
-        return winsorize(z.dropna())
+        return _arc_rolling_zscore(series, w, f, winsorize)
 
     def _build_z_scores(self):
         """Build Z-score features from macro variables."""
