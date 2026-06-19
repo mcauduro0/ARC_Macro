@@ -34,11 +34,13 @@ def test_duckdb_matches_pandas(asof):
     b = as_of_wide_duckdb(df, _ts(asof))
     if a.empty and b.empty:
         return
-    pd.testing.assert_frame_equal(
-        a.sort_index().sort_index(axis=1),
-        b.sort_index().sort_index(axis=1),
-        check_dtype=False,
-    )
+    a = a.sort_index().sort_index(axis=1)
+    b = b.sort_index().sort_index(axis=1)
+    # Column-index dtype can differ by pandas version (object vs StringDtype when the
+    # duckdb .df() path infers str); we only care that the labels+values match.
+    a.columns = a.columns.astype("object")
+    b.columns = b.columns.astype("object")
+    pd.testing.assert_frame_equal(a, b, check_dtype=False, check_column_type=False)
 
 
 def test_duckdb_respects_revision_and_lag():
