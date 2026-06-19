@@ -1,0 +1,44 @@
+name: CI
+
+# Phase 0 foundation gate. Fixes audit finding ci-1 ("CI never runs the test suite").
+# The Python job is the real gate; the TS/vitest job is informational until the
+# pnpm lockfile mismatch (patchedDependencies: wouter) is resynced — see DIAGNOSTIC_2026-06.md.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  python-foundation:
+    name: Python foundation (gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install foundation deps
+        run: pip install "numpy>=1.24" "pandas>=2.0" "scipy>=1.10" "pydantic>=2.0" "pytest>=8"
+      - name: Run Phase 0 suite (reproducibility + contracts + leakage canaries)
+        run: pytest tests/ -v
+
+  ts-tests:
+    name: TS / vitest (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true # pre-existing TS suite + lockfile resync are a tracked follow-up
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      # NOTE: --no-frozen-lockfile because pnpm-lock.yaml's patchedDependencies is out of
+      # sync with package.json today; switch to --frozen-lockfile once the lockfile is resynced.
+      - name: Install JS deps
+        run: pnpm install --no-frozen-lockfile
+      - name: Run vitest
+        run: pnpm test
