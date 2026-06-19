@@ -31,6 +31,10 @@ _CATALOG: dict[str, SeriesContract] = {
         SeriesContract(series_id="DIVIDA_BRUTA_PIB", source="BCB_SGS", source_code="13762", frequency="M",
                        unit="pct_gdp", publication_lag_days=30, valid_min=0, valid_max=200,
                        allowed_revision_abs=2.0, license="BCB open data", description="Gross debt/GDP (SGS 13762)"),
+        # --- BCB Focus (Olinda Expectativas) ---
+        SeriesContract(series_id="FOCUS_IPCA_12M", source="BCB_FOCUS", source_code="IPCA", frequency="D",
+                       unit="pct", publication_lag_days=1, valid_min=0, valid_max=30,
+                       license="BCB open data", description="Focus 12m-ahead IPCA expectation (median)"),
         # --- FRED (https://api.stlouisfed.org/fred) ---
         SeriesContract(series_id="UST10Y", source="FRED", source_code="DGS10", frequency="D",
                        unit="pct", publication_lag_days=1, valid_min=-2, valid_max=25,
