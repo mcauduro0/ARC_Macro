@@ -34,11 +34,12 @@ _RUN = (
 
 def _run(causal: str, timeout: int) -> dict:
     out_path = os.path.join(tempfile.gettempdir(), f"arc_summary_causal_{causal}.json")
+    var = os.environ.get("ARC_MEASURE_VAR", "ARC_CAUSAL_WINSORIZE")  # toggle to vary (fix=1, legacy=0)
     env = os.environ.copy()
-    env["ARC_CAUSAL_WINSORIZE"] = causal
+    env[var] = causal
     env["ARC_OUT"] = out_path
     env["ARC_ROOT"] = ROOT
-    print(f"[measure] running backtest with ARC_CAUSAL_WINSORIZE={causal} ...", file=sys.stderr)
+    print(f"[measure] running backtest with {var}={causal} ...", file=sys.stderr)
     p = subprocess.run([sys.executable, "-c", _RUN], cwd=MODEL_DIR, env=env,
                        capture_output=True, text=True, timeout=timeout)
     if not os.path.exists(out_path):
