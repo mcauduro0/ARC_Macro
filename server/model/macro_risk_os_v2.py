@@ -34,10 +34,22 @@ warnings.filterwarnings('ignore')
 try:
     from arc.causal import causal_winsorize as _causal_winsorize
     from arc.features import rolling_zscore as _arc_rolling_zscore
+    from arc.eval import forward_returns as _arc_forward_returns
 except Exception:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
     from arc.causal import causal_winsorize as _causal_winsorize
     from arc.features import rolling_zscore as _arc_rolling_zscore
+    from arc.eval import forward_returns as _arc_forward_returns
+
+
+def _forward_target(ret_series, horizon=1):
+    """Forward-aligned training target: y[t] = return earned over (t, t+horizon] — what the
+    model is deployed to predict. Fixes the contemporaneous-target bug (audit backtest/quant-1)
+    that trained features[t] -> return[t]. Set ARC_FORWARD_TARGET=0 to fall back to the legacy
+    contemporaneous target (measurement only)."""
+    if os.environ.get("ARC_FORWARD_TARGET", "1") == "0":
+        return ret_series
+    return _arc_forward_returns(ret_series, horizon)
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -1768,8 +1780,10 @@ class AlphaModels:
             if len(available_feats) < 2:
                 continue
 
-            # Align returns and features up to asof_date
-            y = ret_df[inst].loc[:asof_date]
+            # Align FORWARD returns and features up to asof_date (train features[t]->ret over
+            # next horizon, matching deployment). The asof row's forward return is unknown and
+            # is dropped below — no leakage.
+            y = _forward_target(ret_df[inst], self.cfg.get('prediction_horizon_months', 1)).loc[:asof_date]
             X = feat_df[available_feats].loc[:asof_date]
 
             # Align indices
@@ -1966,8 +1980,10 @@ class EnsembleAlphaModels:
             if len(available_feats) < 2:
                 continue
 
-            # Align returns and features up to asof_date
-            y = ret_df[inst].loc[:asof_date]
+            # Align FORWARD returns and features up to asof_date (train features[t]->ret over
+            # next horizon, matching deployment). The asof row's forward return is unknown and
+            # is dropped below — no leakage.
+            y = _forward_target(ret_df[inst], self.cfg.get('prediction_horizon_months', 1)).loc[:asof_date]
             X = feat_df[available_feats].loc[:asof_date]
             common = y.index.intersection(X.index)
             y = y.reindex(common).dropna()
