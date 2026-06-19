@@ -29,6 +29,14 @@ from scipy import stats
 import shap
 warnings.filterwarnings('ignore')
 
+# arc.causal: leakage-free (point-in-time) transforms. Fixes the full-sample winsorize
+# look-ahead (audit feat-1). Path fallback so it resolves when run from server/model.
+try:
+    from arc.causal import causal_winsorize as _causal_winsorize
+except Exception:
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    from arc.causal import causal_winsorize as _causal_winsorize
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -164,12 +172,16 @@ def to_monthly(series, method='last'):
 
 
 def winsorize(s, lower=0.05, upper=0.95):
-    """Winsorize at 5-95 percentiles."""
+    """Causal (point-in-time) winsorize via EXPANDING quantiles.
+
+    Fixes the full-sample look-ahead: previously clipped to s.quantile(0.05/0.95) over the
+    WHOLE series (incl. the future), so the feature_df (built once, then sliced by asof)
+    leaked future tails into every Z_ feature and the instrument returns. Each point is now
+    clipped only to quantiles of data up to and including it. See arc.causal +
+    tests/test_engine_causal_wiring.py. Within-asof training slices stay causally correct."""
     if len(s) < 10:
         return s
-    lo = s.quantile(lower)
-    hi = s.quantile(upper)
-    return s.clip(lo, hi)
+    return _causal_winsorize(s, lower=lower, upper=upper, window=None, min_periods=10)
 
 
 class DataLayer:

@@ -19,20 +19,33 @@ References:
   - Rachel & Summers (2019)
 """
 
+import os
+import sys
+
 import numpy as np
 import pandas as pd
-from scipy.stats import mstats
+
+# arc.causal: leakage-free transforms. Fixes the full-sample mstats.winsorize look-ahead
+# in the composite r* construction (audit eq-2). Path fallback for server/model runtime.
+try:
+    from arc.causal import causal_winsorize as _causal_winsorize
+except Exception:
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    from arc.causal import causal_winsorize as _causal_winsorize
 
 
 def _winsorize(s, limits=(0.05, 0.05)):
-    """Winsorize a pandas Series at 5th/95th percentiles."""
-    if isinstance(s, pd.Series):
-        arr = s.dropna().values
-        if len(arr) < 10:
-            return s
-        w = mstats.winsorize(arr, limits=limits)
-        return pd.Series(w, index=s.dropna().index).reindex(s.index)
-    return s
+    """Causal (point-in-time) winsorize via EXPANDING quantiles.
+
+    Was mstats.winsorize over the WHOLE array (full-sample look-ahead, eq-2); the composite
+    r* is built once then consumed historically, so future tails leaked. Now each point is
+    clipped only to quantiles up to it. limits=(lower_frac, upper_frac_from_top)."""
+    if not isinstance(s, pd.Series):
+        return s
+    if s.dropna().shape[0] < 10:
+        return s
+    return _causal_winsorize(s.astype("float64"), lower=limits[0], upper=1.0 - limits[1],
+                             window=None, min_periods=10)
 
 
 def _safe_align(*series, min_len=24):
