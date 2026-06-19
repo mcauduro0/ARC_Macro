@@ -1,0 +1,28 @@
+# ARC Macro 2.0 — Python project (Phase 0 foundations)
+# Seed of the future uv workspace described in ARCHITECTURE_SOTA.md (arc-contracts, arc-repro, arc-quant/validation).
+[project]
+name = "arc-macro"
+version = "0.1.0"
+description = "ARC Macro 2.0 — institutional Brazil-macro trading platform (Phase 0 foundations: reproducibility, contracts, causal transforms, leakage canaries)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["arc*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
