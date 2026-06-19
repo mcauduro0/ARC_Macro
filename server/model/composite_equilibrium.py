@@ -986,3 +986,109 @@ class CompositeEquilibriumRate:
 
         self.composite_selic_star = selic_star
         return composite, selic_star
+
+    def compute_causal(self, model_results, regime_probs_df, ipca_yoy, ipca_exp,
+                       ibc_br, selic, pi_star_series):
+        """Causal composite r*/SELIC* — fixes audit eq-1/eq-3.
+
+        ``compute`` takes a SINGLE regime-probability vector (the as-of date's regime) and applies
+        those weights to EVERY historical date, so the r* feature at month t is rebuilt using the
+        regime classification of a later month — a look-ahead that the forward-target alignment then
+        amplifies into IC. This method instead uses the TIME-VARYING regime history: the weights (and
+        Taylor coefficients) at month t come from the regime probabilities AT t. With filtered regime
+        probs (regime-1) those are point-in-time, so the whole r* feature becomes causal.
+
+        regime_probs_df: DataFrame indexed by date with P_carry / P_riskoff / P_stress columns
+        (as known at the as-of date). Other args as in ``compute``.
+        """
+        valid_models = {k: v for k, v in model_results.items()
+                        if isinstance(v, pd.Series) and len(v) > 12}
+        if len(valid_models) == 0:
+            return pd.Series(dtype=float), pd.Series(dtype=float)
+
+        # Common index across model r* series
+        all_idx = None
+        for series in valid_models.values():
+            all_idx = series.index if all_idx is None else all_idx.intersection(series.index)
+        if all_idx is None or len(all_idx) < 12:
+            df_models = pd.DataFrame(valid_models).ffill().dropna(how='all')
+            all_idx = df_models.index
+        all_series = pd.DataFrame({k: v.reindex(all_idx).ffill() for k, v in valid_models.items()})
+
+        # Time-varying regime probs, carried causally onto the r* index (ffill = last known regime).
+        def _col(df, *names):
+            for n in names:
+                if n in df.columns:
+                    return df[n].reindex(all_idx, method='ffill')
+            return None
+
+        pc = _col(regime_probs_df, 'P_carry', 'P_Carry')
+        pr = _col(regime_probs_df, 'P_riskoff', 'P_RiskOff')
+        ps = _col(regime_probs_df, 'P_stress', 'P_domestic_stress', 'P_StressDom')
+        pc = pc if pc is not None else pd.Series(1.0, index=all_idx)
+        pr = pr if pr is not None else pd.Series(0.0, index=all_idx)
+        ps = ps if ps is not None else pd.Series(0.0, index=all_idx)
+        tot = (pc + pr + ps)
+        # Where regime info is missing, fall back to pure-carry prior (pc=1) rather than zeros.
+        valid = tot > 0
+        pc = pc.where(valid, 1.0); pr = pr.where(valid, 0.0); ps = ps.where(valid, 0.0)
+        tot = tot.where(valid, 1.0)
+        pc, pr, ps = pc / tot, pr / tot, ps / tot
+
+        # Per-date model weights = Σ p_regime(t) × W_regime[model], normalized per date.
+        weight_df = pd.DataFrame(0.0, index=all_idx, columns=list(valid_models.keys()))
+        for model_name in valid_models:
+            weight_df[model_name] = (
+                pc * self.REGIME_WEIGHTS['carry'].get(model_name, 0.0)
+                + pr * self.REGIME_WEIGHTS['riskoff'].get(model_name, 0.0)
+                + ps * self.REGIME_WEIGHTS['domestic_stress'].get(model_name, 0.0)
+            )
+        wsum = weight_df.sum(axis=1).replace(0.0, np.nan)
+        weight_df = weight_df.div(wsum, axis=0).fillna(0.0)
+
+        composite = (all_series * weight_df).sum(axis=1).clip(2.0, 10.0).dropna()
+        self.composite_rstar = composite
+
+        # Snapshot contributions (last row) for logging/dashboard parity with compute().
+        if len(composite) > 0:
+            last_w = weight_df.reindex([composite.index[-1]]).iloc[0]
+            for model_name, series in valid_models.items():
+                sv = series.reindex(composite.index).ffill()
+                self.model_contributions[model_name] = {
+                    'weight': round(float(last_w.get(model_name, 0.0)), 3),
+                    'current_value': round(float(sv.iloc[-1]), 2) if len(sv) and pd.notna(sv.iloc[-1]) else 0,
+                }
+
+        # === SELIC* with per-date Taylor coefficients ===
+        aligned = _safe_align(composite, ipca_yoy, min_len=12)
+        if aligned is None:
+            self.composite_selic_star = composite + 4.0
+            return composite, self.composite_selic_star
+        (comp_a, ipca_a), c_idx = aligned
+
+        if len(ipca_exp) > 12:
+            pie = ipca_exp.reindex(c_idx).ffill().fillna(ipca_a)
+        else:
+            pie = ipca_a.rolling(6, min_periods=3).mean()
+        pi_star = pi_star_series.reindex(c_idx).ffill() if pi_star_series is not None else pd.Series(3.0, index=c_idx)
+
+        output_gap = pd.Series(0.0, index=c_idx)
+        if len(ibc_br) > 36:
+            ibc_c = ibc_br.reindex(c_idx).ffill()
+            if ibc_c.notna().sum() > 24:
+                ibc_trend = ibc_c.rolling(60, min_periods=24).mean()
+                output_gap = (((ibc_c / ibc_trend) - 1) * 100).clip(-5, 5).fillna(0)
+
+        alpha = (pc * self.REGIME_TAYLOR['carry']['alpha']
+                 + pr * self.REGIME_TAYLOR['riskoff']['alpha']
+                 + ps * self.REGIME_TAYLOR['domestic_stress']['alpha']).reindex(c_idx)
+        beta = (pc * self.REGIME_TAYLOR['carry']['beta']
+                + pr * self.REGIME_TAYLOR['riskoff']['beta']
+                + ps * self.REGIME_TAYLOR['domestic_stress']['beta']).reindex(c_idx)
+        alpha = alpha.fillna(1.0)
+        beta = beta.fillna(0.3)
+
+        inflation_gap = ipca_a - pi_star
+        selic_star = (comp_a + pie + alpha * inflation_gap + beta * output_gap).dropna()
+        self.composite_selic_star = selic_star
+        return composite, selic_star

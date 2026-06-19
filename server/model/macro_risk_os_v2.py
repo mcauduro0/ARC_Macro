@@ -33,13 +33,15 @@ warnings.filterwarnings('ignore')
 # look-ahead (audit feat-1). Path fallback so it resolves when run from server/model.
 try:
     from arc.causal import causal_winsorize as _causal_winsorize
-    from arc.features import rolling_zscore as _arc_rolling_zscore
+    from arc.features import rolling_zscore as _arc_rolling_zscore, bounded_ffill as _arc_bounded_ffill
     from arc.eval import forward_returns as _arc_forward_returns
+    from arc.regime import filtered_posteriors as _arc_filtered_posteriors
 except Exception:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
     from arc.causal import causal_winsorize as _causal_winsorize
-    from arc.features import rolling_zscore as _arc_rolling_zscore
+    from arc.features import rolling_zscore as _arc_rolling_zscore, bounded_ffill as _arc_bounded_ffill
     from arc.eval import forward_returns as _arc_forward_returns
+    from arc.regime import filtered_posteriors as _arc_filtered_posteriors
 
 
 def _forward_target(ret_series, horizon=1):
@@ -1634,13 +1636,28 @@ class FeatureEngine:
                 log(f"    Model 5 (Regime) error: {e}")
 
         # === Recompute composite with actual regime weights ===
+        # eq-1/eq-3 fix: when the full regime history is available, build r* CAUSALLY — each date's
+        # weights come from the regime probs AT that date, not the as-of date's regime broadcast over
+        # all history. ARC_CAUSAL_RSTAR_REGIME=0 restores the legacy full-history overwrite (measurement).
         compositor = CompositeEquilibriumRate()
-        composite_rstar, selic_star = compositor.compute(
-            model_results, regime_probs_dict,
-            self._eq_ipca_12m, self._eq_ipca_exp,
-            self._eq_ibc_br, self._eq_selic,
-            self._pi_star_series
+        _use_causal_rstar = (
+            os.environ.get("ARC_CAUSAL_RSTAR_REGIME", "1") != "0"
+            and regime_probs_df is not None and len(regime_probs_df) > 12
         )
+        if _use_causal_rstar:
+            composite_rstar, selic_star = compositor.compute_causal(
+                model_results, regime_probs_df,
+                self._eq_ipca_12m, self._eq_ipca_exp,
+                self._eq_ibc_br, self._eq_selic,
+                self._pi_star_series
+            )
+        else:
+            composite_rstar, selic_star = compositor.compute(
+                model_results, regime_probs_dict,
+                self._eq_ipca_12m, self._eq_ipca_exp,
+                self._eq_ibc_br, self._eq_selic,
+                self._pi_star_series
+            )
 
         if len(selic_star) > 12:
             self._taylor_selic_star = selic_star
@@ -1694,8 +1711,15 @@ class FeatureEngine:
             return
 
         self.feature_df = pd.DataFrame(self.features)
-        # Forward fill macro features (published with lag)
-        self.feature_df = self.feature_df.ffill().dropna(how='all')
+        # Forward fill macro features (published with lag). feat-3 fix: BOUNDED ffill — a value is
+        # carried at most ARC_FFILL_LIMIT months (default 12) instead of indefinitely, so a stale /
+        # discontinued series stops masquerading as fresh. ARC_BOUNDED_FFILL=0 restores legacy
+        # unbounded ffill (measurement only).
+        if os.environ.get("ARC_BOUNDED_FFILL", "1") == "0":
+            self.feature_df = self.feature_df.ffill().dropna(how='all')
+        else:
+            _ffill_limit = int(os.environ.get("ARC_FFILL_LIMIT", "12"))
+            self.feature_df = _arc_bounded_ffill(self.feature_df, limit=_ffill_limit).dropna(how='all')
         log(f"\n  Feature matrix: {len(self.feature_df)} months x {len(self.feature_df.columns)} features")
 
     def get_features_at(self, date, feature_names=None):
@@ -2650,7 +2674,15 @@ class RegimeModel:
             )
             hmm.fit(obs_std.values)
 
-            probs = hmm.predict_proba(obs_std.values)
+            # regime-1 fix: feed FILTERED posteriors P(s_t | o_1..o_t) as the historical regime
+            # feature, not the smoothed forward-backward posteriors from predict_proba (which
+            # condition each month on the whole sequence incl. the future = look-ahead). predict()
+            # (Viterbi) is used only to LABEL state->regime by indicator means, so it keeps the
+            # full-sequence decode. ARC_HMM_FILTERED=0 restores legacy smoothed probs (measurement).
+            if os.environ.get("ARC_HMM_FILTERED", "1") == "0":
+                probs = hmm.predict_proba(obs_std.values)
+            else:
+                probs = _arc_filtered_posteriors(hmm, obs_std.values)
             states = hmm.predict(obs_std.values)
 
             if n_states == 3:
@@ -3216,6 +3248,11 @@ class BacktestHarness:
         last_shap_idx = -shap_interval  # force first computation
 
         records = []
+        # Promotion-gate diagnostics: per-instrument (date, prediction, realized fwd return, carry).
+        # Captured only when ARC_DUMP_DIAGNOSTICS=1 so the gate (arc.eval.gate) can carry-neutralize
+        # the IC and build a carry-only benchmark from the SAME run. Zero cost otherwise.
+        _dump_diag = os.environ.get("ARC_DUMP_DIAGNOSTICS", "0") == "1"
+        gate_diag = {}
 
         for i, date in enumerate(dates):
             prev_date = ret_df.index[ret_df.index.get_loc(date) - 1]
@@ -3280,6 +3317,23 @@ class BacktestHarness:
                 if inst not in ic_history:
                     ic_history[inst] = []
                 ic_history[inst].append((mu_pred, r))
+
+                # Gate diagnostics: prediction (decided at prev_date) vs realized fwd return r,
+                # plus the decision-time carry signal for that instrument.
+                if _dump_diag:
+                    carry_val = None
+                    feat_df = getattr(self.engine.feature_engine, 'feature_df', None)
+                    carry_col = f'carry_{inst}'
+                    if feat_df is not None and carry_col in feat_df.columns:
+                        cser = feat_df[carry_col].loc[:prev_date]
+                        if len(cser) > 0 and pd.notna(cser.iloc[-1]):
+                            carry_val = float(cser.iloc[-1])
+                    gate_diag.setdefault(inst, []).append({
+                        'date': date.strftime('%Y-%m-%d'),
+                        'pred': float(mu_pred),
+                        'realized': float(r),
+                        'carry': carry_val,
+                    })
 
                 # Update OOS history for ensemble adaptive weights
                 model_preds = extra_info.get('model_predictions', {})
@@ -3452,6 +3506,14 @@ class BacktestHarness:
 
         self.results = records
         self.shap_history = shap_history  # v3.9: temporal SHAP snapshots
+        if _dump_diag:
+            try:
+                diag_path = os.path.join(OUTPUT_DIR, 'gate_diagnostics.json')
+                with open(diag_path, 'w') as _f:
+                    json.dump(gate_diag, _f)
+                log(f"  Gate diagnostics written: {diag_path} ({sum(len(v) for v in gate_diag.values())} rows)")
+            except Exception as _e:
+                log(f"  Gate diagnostics dump failed: {_e}")
         self._compute_summary(records, ic_history)
         log(f"  SHAP history: {len(shap_history)} snapshots across {len(set(s['date'] for s in shap_history))} dates")
         return self
