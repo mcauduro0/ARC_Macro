@@ -1,12 +1,18 @@
-numpy>=1.24
-pandas>=2.0
-scipy>=1.10
-scikit-learn>=1.3
+# LOCKED dependencies — compiled from requirements.in. Do not hand-edit floors here.
+# Pins below are the versions observed on the dev machine (2026-06-19). The 3 packages
+# not installed there (xgboost/hmmlearn/wbgapi) keep floors with a TODO — pin them by
+# regenerating this lock in the canonical runtime (see requirements.in header).
+# Rationale: pinning removes the silent version drift the audit flagged (repro-1).
+numpy==2.4.2
+pandas==2.2.3
+scipy==1.17.1
+scikit-learn==1.5.2
+yfinance==1.2.0
+requests==2.32.5
+arch==8.0.0
+shap==0.51.0
+statsmodels==0.14.6
+# TODO(pin-in-canonical-runtime): not installed on dev machine — left at floor to avoid a blind pin.
 xgboost>=2.0
-yfinance>=0.2.30
-requests>=2.28
-arch>=6.0
-shap>=0.43
 hmmlearn>=0.3.0
-statsmodels>=0.14
 wbgapi>=1.0
