@@ -44,6 +44,10 @@ def _winsorize(s, limits=(0.05, 0.05)):
         return s
     if s.dropna().shape[0] < 10:
         return s
+    if os.environ.get("ARC_CAUSAL_WINSORIZE", "1") == "0":  # legacy look-ahead (measurement only)
+        arr = s.dropna().values
+        from scipy.stats import mstats
+        return pd.Series(mstats.winsorize(arr, limits=limits), index=s.dropna().index).reindex(s.index)
     return _causal_winsorize(s.astype("float64"), lower=limits[0], upper=1.0 - limits[1],
                              window=None, min_periods=10)
 

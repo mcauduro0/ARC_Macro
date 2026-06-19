@@ -178,9 +178,14 @@ def winsorize(s, lower=0.05, upper=0.95):
     WHOLE series (incl. the future), so the feature_df (built once, then sliced by asof)
     leaked future tails into every Z_ feature and the instrument returns. Each point is now
     clipped only to quantiles of data up to and including it. See arc.causal +
-    tests/test_engine_causal_wiring.py. Within-asof training slices stay causally correct."""
+    tests/test_engine_causal_wiring.py. Within-asof training slices stay causally correct.
+
+    Set env ARC_CAUSAL_WINSORIZE=0 to fall back to the legacy full-sample (look-ahead)
+    behavior — ONLY for before/after impact measurement (scripts/measure_causal_impact.py)."""
     if len(s) < 10:
         return s
+    if os.environ.get("ARC_CAUSAL_WINSORIZE", "1") == "0":
+        return s.clip(s.quantile(lower), s.quantile(upper))  # legacy look-ahead (measurement only)
     return _causal_winsorize(s, lower=lower, upper=upper, window=None, min_periods=10)
 
 
