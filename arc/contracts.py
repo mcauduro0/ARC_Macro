@@ -46,6 +46,7 @@ class SeriesContract(BaseModel):
 
     series_id: str
     source: str = Field(description="e.g. BCB_SGS, BCB_FOCUS, ANBIMA, FRED, FMP, TE, IPEADATA")
+    source_code: Optional[str] = Field(default=None, description="provider's native series code, e.g. BCB SGS '432', FRED 'DGS10'")
     frequency: Frequency
     unit: str
     publication_lag_days: int = Field(
