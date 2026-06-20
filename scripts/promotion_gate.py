@@ -84,6 +84,17 @@ def main() -> None:
         diag = json.load(f)
 
     pred_panel, realized_panel, carry_panel = _panels(diag)
+
+    # Carry-neutralization integrity (found in Phase 4): the `hard` sovereign-spread return earns the
+    # SPREAD carry (embi/10000/12), but the engine's carry_hard feature is the cupom cambial (FX) —
+    # corr~0 with sovereign signals, so neutralizing hard against it is vacuous and OVERSTATES hard's
+    # carry-neutral IC. Override hard's carry with its true return-carry so the gate is honest.
+    if "hard" in carry_panel.columns:
+        embi = harness.engine.data_layer.monthly.get("embi_spread", None)
+        if embi is not None and len(embi) > 12:
+            carry_panel["hard"] = (embi / 10000.0 / 12.0).reindex(carry_panel.index)
+            print("[gate] hard carry corrected to spread carry (was cupom cambial)", file=sys.stderr)
+
     # keep only instruments that actually have a carry signal (else carry-neutralization is vacuous)
     insts = [c for c in pred_panel.columns
              if c in carry_panel.columns and carry_panel[c].notna().sum() >= 12]
