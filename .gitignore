@@ -117,6 +117,9 @@ server/model/data/
 server/model/output/
 __pycache__/
 
+# Paper-loop runtime state (append-only ledgers, proposals — generated at runtime, Phase 7)
+state/
+
 # Python tooling / build / venv (Phase 0)
 *.py[cod]
 .pytest_cache/
