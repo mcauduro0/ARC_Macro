@@ -1132,18 +1132,26 @@ class FeatureEngine:
                 self.features[f'carry_{bucket}'] = excess
                 log(f"    carry_{bucket}: {len(excess)} months, mean={excess.mean()*100:.3f}%/m")
 
-        # Hard carry: spread level / 12
-        # Carry DDI (cupom cambial) — use swap DI x Dólar rate
-        cupom_360 = m.get('swap_dixdol_360d', pd.Series(dtype=float))
-        cupom_30 = m.get('fx_cupom_1m', pd.Series(dtype=float))
-        cupom_for_carry = cupom_360 if len(cupom_360) > 12 else cupom_30
-        if len(cupom_for_carry) > 12:
-            carry_hard = cupom_for_carry / 100 / 12  # percent to decimal, monthly
+        # Hard carry: the sovereign-spread position earns the SPREAD carry (spread level / 12). The
+        # legacy code used the cupom cambial (FX carry) here — a mismatch (Phase 4 finding): its
+        # correlation with sovereign signals is ~0, so carry-neutralizing `hard` against it was
+        # vacuous and OVERSTATED hard's apparent edge (e.g. Z_cds_br carry-neutral IC +0.16 -> -0.045
+        # once neutralized against the true spread carry). Default to the spread carry; set
+        # ARC_CARRY_HARD_SPREAD=0 to restore the legacy cupom (before/after measurement only).
+        embi = m.get('embi_spread', pd.Series(dtype=float))
+        if os.environ.get("ARC_CARRY_HARD_SPREAD", "1") != "0" and len(embi) > 12:
+            carry_hard = embi / 10000 / 12  # bps spread -> monthly decimal carry
             self.features['carry_hard'] = carry_hard
-            log(f"    carry_hard (cupom cambial): {len(carry_hard)} months, mean={carry_hard.mean()*100:.3f}%/m")
+            log(f"    carry_hard (spread carry): {len(carry_hard)} months, mean={carry_hard.mean()*100:.3f}%/m")
         else:
-            embi = m.get('embi_spread', pd.Series(dtype=float))
-            if len(embi) > 12:
+            cupom_360 = m.get('swap_dixdol_360d', pd.Series(dtype=float))
+            cupom_30 = m.get('fx_cupom_1m', pd.Series(dtype=float))
+            cupom_for_carry = cupom_360 if len(cupom_360) > 12 else cupom_30
+            if len(cupom_for_carry) > 12:
+                carry_hard = cupom_for_carry / 100 / 12  # percent to decimal, monthly (legacy)
+                self.features['carry_hard'] = carry_hard
+                log(f"    carry_hard (legacy cupom cambial): {len(carry_hard)} months, mean={carry_hard.mean()*100:.3f}%/m")
+            elif len(embi) > 12:
                 carry_hard = embi / 10000 / 12
                 self.features['carry_hard'] = carry_hard
                 log(f"    carry_hard (EMBI fallback): {len(carry_hard)} months, mean={carry_hard.mean()*100:.3f}%/m")
