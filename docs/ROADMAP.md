@@ -71,9 +71,15 @@ infra is dead weight.
 ### Phase 4 — Honest edge search *(the actual alpha problem)*
 With the spine + gate, hunt **orthogonal-to-carry, stationary** signals, each promoted only if it
 survives CPCV + DSR + half-sample decay. Treat H2 (~0.1–0.2) as the bar to beat, not the inflated H1.
-- Nowcast / Dynamic Factor (mixed-frequency Kalman) to kill the IBC-Br 2-month blindspot.
-- Regime-*conditional* alpha (separate models/weights per regime) — only if it passes out-of-sample.
-- Investigate `hard` (sovereign-spread) — its refit-OOS IC (~0.33) is the most plausible genuine residual.
+- **Round 1 (done):** 45 pre-registered macro + momentum hypotheses → only `front/mom3` survived
+  (operationalized as a gated sleeve, Phase 4.3; awaiting forward paper).
+- **Round 2 (done, 4.4):** Nowcast / Dynamic Factor (mixed-frequency, strictly PIT) → **a 2nd gated
+  candidate** (activity nowcast on belly/long; cnIC ~0.19–0.23, H2>H1, survives carry+market
+  neutralization). Caveats: ~one bet, fragile to inputs, orthogonality-to-momentum unmeasured →
+  candidate, not promotion. Real-curve track has **no historical data** (single 2024 snapshot) → deferred
+  pending NTN-B/breakeven collection. See `docs/PHASE4_4_NOWCAST_EDGE_2026-06.md`.
+- Still open: regime-*conditional* alpha (only if OOS); `hard` (sovereign-spread) refit-OOS ~0.33;
+  positioning/flows (CFTC/IDP/portfolio series are wired but CSVs absent — collect them).
 
 ### Phase 5 — Intelligence upgrades
 - Probabilistic forecasts (credible intervals) → confidence-scaled sizing.
