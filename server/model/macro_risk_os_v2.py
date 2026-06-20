@@ -34,12 +34,14 @@ warnings.filterwarnings('ignore')
 try:
     from arc.causal import causal_winsorize as _causal_winsorize
     from arc.features import rolling_zscore as _arc_rolling_zscore, bounded_ffill as _arc_bounded_ffill
+    from arc.features import causal_annual_to_monthly as _arc_causal_annual_to_monthly
     from arc.eval import forward_returns as _arc_forward_returns
     from arc.regime import filtered_posteriors as _arc_filtered_posteriors
 except Exception:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
     from arc.causal import causal_winsorize as _causal_winsorize
     from arc.features import rolling_zscore as _arc_rolling_zscore, bounded_ffill as _arc_bounded_ffill
+    from arc.features import causal_annual_to_monthly as _arc_causal_annual_to_monthly
     from arc.eval import forward_returns as _arc_forward_returns
     from arc.regime import filtered_posteriors as _arc_filtered_posteriors
 
@@ -440,8 +442,13 @@ class DataLayer:
             ppp_m = self.monthly['ppp_factor']
             # If data is annual (< 50 points for 30+ years), interpolate
             if len(ppp_m) < 50:
-                ppp_daily = ppp_m.resample('D').interpolate(method='linear')
-                ppp_interp = ppp_daily.resample('ME').last().dropna()
+                if os.environ.get("ARC_CAUSAL_INTERP", "1") != "0":
+                    # Causal: hold the last KNOWN annual anchor. Linear interpolation blends toward
+                    # the NEXT (future) anchor => look-ahead (confirmed leak, 2026-06 hunt).
+                    ppp_interp = _arc_causal_annual_to_monthly(ppp_m)
+                else:
+                    ppp_daily = ppp_m.resample('D').interpolate(method='linear')
+                    ppp_interp = ppp_daily.resample('ME').last().dropna()
                 # Forward-fill beyond last annual data point to cover current month
                 # PPP changes slowly (structural), so forward-fill is appropriate
                 spot_m = self.monthly.get('ptax', self.monthly.get('spot', pd.Series(dtype=float)))
@@ -463,8 +470,11 @@ class DataLayer:
             if key in self.monthly and len(self.monthly[key]) > 2:
                 raw = self.monthly[key]
                 if len(raw) < 50:  # Annual data
-                    daily = raw.resample('D').interpolate(method='linear')
-                    interp = daily.resample('ME').last().dropna()
+                    if os.environ.get("ARC_CAUSAL_INTERP", "1") != "0":
+                        interp = _arc_causal_annual_to_monthly(raw)  # causal step-hold (no future blend)
+                    else:
+                        daily = raw.resample('D').interpolate(method='linear')
+                        interp = daily.resample('ME').last().dropna()
                     # Forward-fill to match spot dates
                     spot_m = self.monthly.get('ptax', self.monthly.get('spot', pd.Series(dtype=float)))
                     if len(spot_m) > 0 and len(interp) > 0:
