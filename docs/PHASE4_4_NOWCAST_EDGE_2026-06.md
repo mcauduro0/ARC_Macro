@@ -68,10 +68,35 @@ Caveats (must not be glossed):
    economic idea (activity nowcast → policy → rate level) expressed three ways.
 2. **Fragile to the input set** (leave-one-out flips front/long), so it is one mixed factor, not a robust
    ensemble of independent activity reads.
-3. **Orthogonality to rate-price momentum not yet measured** — `front/mom3` already trades rate momentum;
-   before combining sleeves, confirm `neg_nowcast_mom3` adds IC beyond the rate's own momentum.
+3. ~~Orthogonality to rate-price momentum not yet measured~~ — **MEASURED, it is distinct** (see below).
 4. Per project rule, a gate pass is **necessary, not sufficient** — the real test is the forward single-use
    holdout (paper), which it has never seen.
+
+## Orthogonality to rate-price momentum (`front/mom3`) — MEASURED: distinct & complementary
+
+`scripts/check_orthogonality.py` answers whether the nowcast is new alpha or `front/mom3` repackaged
+(both predict the rate level). Carry-neutral throughout:
+
+| | front | belly | long |
+|---|---|---|---|
+| corr(nowcast, own mom3) | +0.38 | +0.30 | +0.11 |
+| partial IC nowcast \| carry + own momentum | **+0.109** | **+0.146** | **+0.167** |
+| partial IC nowcast \| carry + front/mom3 | +0.109 | +0.079 | +0.118 |
+| partial IC momentum \| carry + nowcast | +0.156 | +0.056 | +0.058 |
+
+- Decision-time correlation is only **0.11–0.38** (redundancy would need ~>0.7) — different series.
+- The nowcast **retains +0.11 / +0.15 / +0.17 IC after removing momentum** (all clear the 0.10 bar; on
+  `long` it is barely dented, 0.175→0.167). So it carries information momentum does not.
+- **Dominance flips across the curve:** on `front`, momentum is the stronger leg (front/mom3 retains
+  +0.156; nowcast adds +0.109 on top); on `belly`/`long`, the **nowcast dominates** and momentum adds
+  almost nothing (+0.056/+0.058). They are **complementary**: short-end momentum + belly/long nowcast.
+- The combined refit-OOS (BOTH) sitting *below* nowcast-alone (front 0.18 vs 0.25 etc.) is a **small-sample
+  ridge artifact** — adding the weaker, noisy momentum feature to a 2-coefficient per-fold fit raises
+  estimation variance; it is NOT evidence of overlap (the partial IC is the clean orthogonality measure).
+
+**Conclusion:** the nowcast is a genuinely distinct second signal, strongest on the belly/long where
+`front/mom3` is weak — so the two candidates form a complementary pair across the curve, not a
+double-count. The fragility-to-inputs and ~one-bet caveats remain; forward paper is still the gate.
 
 ### Promotion protocol (next, if pursued)
 
