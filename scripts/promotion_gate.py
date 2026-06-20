@@ -33,6 +33,10 @@ os.environ.setdefault("ARC_FORWARD_TARGET", "1")
 os.environ.setdefault("ARC_HMM_FILTERED", "1")
 os.environ.setdefault("ARC_BOUNDED_FFILL", "1")
 os.environ.setdefault("ARC_CAUSAL_RSTAR_REGIME", "1")
+os.environ.setdefault("ARC_REGIME_PER_SERIES", "1")
+os.environ.setdefault("ARC_FEAT_PER_SERIES", "1")
+os.environ.setdefault("ARC_REGIME_POINT_IN_TIME", "1")
+os.environ.setdefault("ARC_PUBLICATION_LAG", "1")
 os.environ["ARC_DUMP_DIAGNOSTICS"] = "1"
 
 sys.path.insert(0, MODEL_DIR)
@@ -96,13 +100,46 @@ def main() -> None:
         sr_std=sr_std,
     )
 
+    # Refit-OOS CPCV (gate hardening): re-fit a ridge INSIDE each purged fold on the instrument's
+    # actual features vs forward returns — a TRUE out-of-sample probe of period-concentration /
+    # overfitting, unlike the post-hoc IC-stability CPCV in promotion_report (which inherits the
+    # upstream fit). It still cannot detect a leak baked into the features themselves.
+    refit_oos = {}
+    try:
+        from arc.eval import forward_returns, refit_oos_cpcv
+        feat_df = harness.engine.feature_engine.feature_df
+        ret_df = harness.engine.data_layer.ret_df
+        feature_map = eng.EnsembleAlphaModels.FEATURE_MAP
+        horizon = eng.DEFAULT_CONFIG.get("prediction_horizon_months", 1)
+        for inst in insts:
+            if inst not in ret_df.columns:
+                continue
+            feats = [f for f in feature_map.get(inst, []) if f in feat_df.columns]
+            if len(feats) < 2:
+                continue
+            Xi = feat_df[feats]
+            Xi, feats = eng._select_covered_features(Xi, 24)
+            if Xi.shape[1] < 1:
+                continue
+            yi = forward_returns(ret_df[inst], horizon)
+            common = Xi.index.intersection(yi.index)
+            Xi, yi = Xi.reindex(common), yi.reindex(common)
+            mask = ~(Xi.isna().any(axis=1) | yi.isna())
+            Xi, yi = Xi[mask], yi[mask]
+            if len(yi) >= 30:
+                refit_oos[inst] = refit_oos_cpcv(Xi.values, yi.values)
+    except Exception as e:
+        print(f"[gate] refit-OOS CPCV skipped: {e}", file=sys.stderr)
+
     out = verdict.to_dict()
+    out["refit_oos_cpcv"] = refit_oos
     out["meta"] = {
         "n_trials": n_trials, "sr_std": sr_std,
         "n_months": len(overlay_returns), "instruments": insts, "excluded": dropped,
         "toggles": {k: os.environ.get(k) for k in
                     ["ARC_CAUSAL_WINSORIZE", "ARC_FORWARD_TARGET", "ARC_HMM_FILTERED",
-                     "ARC_BOUNDED_FFILL", "ARC_CAUSAL_RSTAR_REGIME"]},
+                     "ARC_BOUNDED_FFILL", "ARC_CAUSAL_RSTAR_REGIME", "ARC_REGIME_PER_SERIES",
+                     "ARC_FEAT_PER_SERIES", "ARC_REGIME_POINT_IN_TIME", "ARC_PUBLICATION_LAG"]},
     }
     report_path = os.path.join(eng.OUTPUT_DIR, "promotion_gate_report.json")
     with open(report_path, "w") as f:
@@ -118,11 +155,19 @@ def main() -> None:
     print(f"  carry-only Sharpe(ann)={ca.get('sr_annual'):.2f}")
     print(f"  mean carry-neutralized IC={agg.get('mean_carry_neutral_ic'):.4f}  "
           f"t={agg.get('carry_neutral_ic_t'):.2f}  worst CPCV IC={agg.get('worst_cpcv_ic'):.3f}")
+    print(f"  half-sample carry-neutral IC: H1(median)={agg.get('median_cn_ic_h1', float('nan')):.3f}  "
+          f"H2(median)={agg.get('median_cn_ic_h2', float('nan')):.3f}  "
+          f"decay={agg.get('median_cn_ic_decay', float('nan')):.3f}  (steep drop = contamination)")
     print("\n  per-instrument:")
     for inst, v in out["per_instrument"].items():
+        ro = out.get("refit_oos_cpcv", {}).get(inst, {})
+        ro_m, ro_lo = ro.get("mean", float("nan")), ro.get("min", float("nan"))
+        hs = v.get("half_sample", {})
         print(f"    {inst:6s} n={v['n']:>3}  IC={v['ic']:+.3f}  carry-neutral IC={v['carry_neutral_ic']:+.3f}  "
               f"carry-only IC={v['carry_only_ic']:+.3f}  CPCV(mean/min)="
-              f"{v['cpcv'].get('mean', float('nan')):+.3f}/{v['cpcv'].get('min', float('nan')):+.3f}")
+              f"{v['cpcv'].get('mean', float('nan')):+.3f}/{v['cpcv'].get('min', float('nan')):+.3f}  "
+              f"H1/H2={hs.get('h1', float('nan')):+.3f}/{hs.get('h2', float('nan')):+.3f}  "
+              f"refit-OOS(mean/min)={ro_m:+.3f}/{ro_lo:+.3f}")
     print(f"\n  VERDICT: {'PASS' if out['passed'] else 'FAIL'}")
     for r in out["reasons"]:
         print(f"    - {r}")

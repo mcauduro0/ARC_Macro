@@ -65,6 +65,33 @@ def carry_only_ic(carry, realized, method: str = "spearman") -> float:
     return information_coefficient(carry, realized, method=method)
 
 
+def half_sample_carry_neutral_ic(pred, realized, carry, method: str = "spearman") -> dict:
+    """Carry-neutralized IC on the first vs second half of the sample (split by row order, which is
+    chronological for a date-sorted panel). A genuine, stationary edge has H1 ≈ H2; a steep drop
+    (H1 ≫ H2) is the textbook contamination signature — the model looks brilliant early (when most of
+    the sample lies in its "future") and decays to its honest level once that look-ahead is exhausted.
+    Carry-neutralization residualizes within each half so the split is not confounded by carry.
+
+    Returns {full, h1, h2, drop, n_h1, n_h2}; drop = h1 - h2 (NaN if either half is too short)."""
+    p = pd.Series(np.asarray(pred, dtype="float64")).reset_index(drop=True)
+    r = pd.Series(np.asarray(realized, dtype="float64")).reset_index(drop=True)
+    c = pd.Series(np.asarray(carry, dtype="float64")).reset_index(drop=True)
+    n = len(p)
+    out = {"full": float("nan"), "h1": float("nan"), "h2": float("nan"),
+           "drop": float("nan"), "n_h1": 0, "n_h2": 0}
+    if n < 24:
+        return out
+    h = n // 2
+    sl1, sl2 = slice(0, h), slice(h, n)
+    out["full"] = carry_neutralized_ic(p, r, c, method=method)
+    out["n_h1"], out["n_h2"] = h, n - h
+    out["h1"] = carry_neutralized_ic(p[sl1], r[sl1], c[sl1], method=method)
+    out["h2"] = carry_neutralized_ic(p[sl2], r[sl2], c[sl2], method=method)
+    if not (np.isnan(out["h1"]) or np.isnan(out["h2"])):
+        out["drop"] = float(out["h1"] - out["h2"])
+    return out
+
+
 def cpcv_ic(pred, realized, n_groups: int = 6, n_test_groups: int = 2,
             embargo: float = 0.02, method: str = "spearman") -> dict:
     """Distribution of IC over combinatorial purged folds for one (pred, realized) pair already in
@@ -83,6 +110,59 @@ def cpcv_ic(pred, realized, n_groups: int = 6, n_test_groups: int = 2,
     for _, test_idx in combinatorial_purged_splits(n, n_groups=n_groups,
                                                    n_test_groups=n_test_groups, embargo=embargo):
         ic = information_coefficient(p[test_idx], r[test_idx], method=method)
+        if not np.isnan(ic):
+            ics.append(float(ic))
+    if not ics:
+        return empty
+    return {"mean": float(np.mean(ics)), "std": float(np.std(ics)),
+            "min": float(np.min(ics)), "n_paths": len(ics)}
+
+
+def _ridge_fit_predict(x_tr, y_tr, x_te, alpha: float):
+    """Closed-form standardized ridge (numpy only, so the gate stays dependency-light): standardize
+    features on TRAIN, ridge-solve with intercept via centering, predict TEST."""
+    mu = x_tr.mean(0)
+    sd = x_tr.std(0)
+    sd[sd < 1e-9] = 1.0
+    xc = (x_tr - mu) / sd
+    ym = y_tr.mean()
+    k = xc.shape[1]
+    beta = np.linalg.solve(xc.T @ xc + alpha * np.eye(k), xc.T @ (y_tr - ym))
+    return ((x_te - mu) / sd) @ beta + ym
+
+
+def refit_oos_cpcv(X, y, t1=None, n_groups: int = 6, n_test_groups: int = 2,
+                   embargo: float = 0.02, alpha: float = 5.0, method: str = "spearman") -> dict:
+    """TRUE out-of-sample CPCV: for each combinatorial purged split, RE-FIT a ridge on the (purged,
+    embargoed) train rows and predict the held-out test rows, then IC(test). Unlike ``cpcv_ic`` —
+    which splits already-computed predictions and therefore inherits whatever the upstream fit did —
+    this re-fits inside every fold, so it characterizes model overfitting / period-concentration
+    rather than in-sample IC stability. (It still cannot detect a leak baked into the FEATURES; only
+    the as-of-invariance tests catch that.)
+
+    X: (T x k) feature matrix, y: forward-return vector aligned to X (pred[t] -> realized over the
+    next period). Returns {mean, std, min, n_paths}.
+    """
+    Xv = np.asarray(X, dtype="float64")
+    yv = np.asarray(y, dtype="float64")
+    empty = {"mean": float("nan"), "std": float("nan"), "min": float("nan"), "n_paths": 0}
+    if Xv.ndim != 2 or len(yv) < n_groups * 4 or Xv.shape[1] < 1:
+        return empty
+    n = len(yv)
+    ics = []
+    for tr, te in combinatorial_purged_splits(n, n_groups=n_groups, n_test_groups=n_test_groups,
+                                              t1=t1, embargo=embargo):
+        if len(tr) < 20 or len(te) < 5:
+            continue
+        mtr = ~(np.isnan(Xv[tr]).any(1) | np.isnan(yv[tr]))
+        mte = ~(np.isnan(Xv[te]).any(1) | np.isnan(yv[te]))
+        if mtr.sum() < 20 or mte.sum() < 5:
+            continue
+        try:
+            pred = _ridge_fit_predict(Xv[tr][mtr], yv[tr][mtr], Xv[te][mte], alpha)
+        except np.linalg.LinAlgError:
+            continue
+        ic = information_coefficient(pred, yv[te][mte], method=method)
         if not np.isnan(ic):
             ics.append(float(ic))
     if not ics:
@@ -156,6 +236,8 @@ class GateThresholds:
     carry_neutral_ic_min: float = 0.02  # mean carry-neutralized IC must clear this margin
     sharpe_beat_carry: bool = True  # overlay Sharpe must exceed carry-only Sharpe
     cpcv_worst_min: float = -0.10   # worst purged-fold IC floor (period-concentration guard)
+    ic_decay_drop_max: float = 0.15  # max median (cnIC_H1 - cnIC_H2): a steep first->second half
+    #                                  drop is the contamination signature, not stationary skill
 
 
 @dataclass
@@ -220,17 +302,27 @@ def promotion_report(
         cn_ic = carry_neutralized_ic(df["p"], df["r"], df["c"])
         co_ic = carry_only_ic(df["c"], df["r"])
         cp = cpcv_ic(df["p"].to_numpy(), df["r"].to_numpy())
+        hs = half_sample_carry_neutral_ic(df["p"], df["r"], df["c"])
         per_inst[inst] = {"n": int(len(df)), "ic": ic, "carry_neutral_ic": cn_ic,
-                          "carry_only_ic": co_ic, "cpcv": cp}
+                          "carry_only_ic": co_ic, "cpcv": cp, "half_sample": hs}
 
     cn_ics = [v["carry_neutral_ic"] for v in per_inst.values() if not np.isnan(v.get("carry_neutral_ic", np.nan))]
     cpcv_worst = [v["cpcv"].get("min", np.nan) for v in per_inst.values() if v.get("cpcv")]
     cpcv_worst = [x for x in cpcv_worst if not np.isnan(x)]
+    hs_h1 = [v["half_sample"]["h1"] for v in per_inst.values()
+             if v.get("half_sample") and not np.isnan(v["half_sample"].get("h1", np.nan))]
+    hs_h2 = [v["half_sample"]["h2"] for v in per_inst.values()
+             if v.get("half_sample") and not np.isnan(v["half_sample"].get("h2", np.nan))]
+    hs_drop = [v["half_sample"]["drop"] for v in per_inst.values()
+               if v.get("half_sample") and not np.isnan(v["half_sample"].get("drop", np.nan))]
     agg = {
         "mean_carry_neutral_ic": float(np.mean(cn_ics)) if cn_ics else float("nan"),
         "carry_neutral_ic_t": float(newey_west_tstat(cn_ics)) if len(cn_ics) >= 3 else float("nan"),
         "n_instruments": len(cn_ics),
         "worst_cpcv_ic": float(np.min(cpcv_worst)) if cpcv_worst else float("nan"),
+        "median_cn_ic_h1": float(np.median(hs_h1)) if hs_h1 else float("nan"),
+        "median_cn_ic_h2": float(np.median(hs_h2)) if hs_h2 else float("nan"),
+        "median_cn_ic_decay": float(np.median(hs_drop)) if hs_drop else float("nan"),
     }
 
     pbo = None
@@ -265,7 +357,15 @@ def promotion_report(
     if not cpcv_ok:
         reasons.append(f"worst purged-fold IC {agg['worst_cpcv_ic']:.3f} < {th.cpcv_worst_min} (period-concentrated)")
 
-    passed = dsr_ok and cn_ok and t_ok and beat_ok and cpcv_ok
+    decay = agg["median_cn_ic_decay"]
+    decay_ok = np.isnan(decay) or decay <= th.ic_decay_drop_max
+    if not decay_ok:
+        reasons.append(
+            f"carry-neutral IC decays {decay:.3f} from first to second half "
+            f"(H1={agg['median_cn_ic_h1']:.3f} -> H2={agg['median_cn_ic_h2']:.3f}, "
+            f"max {th.ic_decay_drop_max}) — non-stationary skill is the contamination signature, not edge")
+
+    passed = dsr_ok and cn_ok and t_ok and beat_ok and cpcv_ok and decay_ok
     if passed:
         reasons.append("PASS: overlay survives deflation and adds IC beyond carry")
 

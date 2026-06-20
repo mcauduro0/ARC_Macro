@@ -481,6 +481,29 @@ class DataLayer:
         _interpolate_annual('ca_pct_gdp')
         _interpolate_annual('trade_openness')
 
+        # P5 fix: PUBLICATION LAG. Macro series are indexed by their REFERENCE month but are only
+        # RELEASED weeks later, so using value[M] for a decision at the end of month M is a look-ahead
+        # (you did not have it yet). Shift each lagged series forward by its real release lag in months
+        # so an end-of-M decision only sees data actually published by then. Market data (FX/rates/CDS/
+        # VIX/UST/commodities) and survey expectations (Focus, us_cpi_exp) are real-time => no shift.
+        # Applied AFTER all derivations (e.g. ipca_yoy is computed from unshifted ipca_monthly, then
+        # both are shifted) so there is no double shift. ARC_PUBLICATION_LAG=0 disables (measurement).
+        if os.environ.get("ARC_PUBLICATION_LAG", "1") != "0":
+            _PUB_LAG_MONTHS = {
+                'ipca_monthly': 1, 'ipca_yoy': 1,     # IPCA released ~day 10 of M+1
+                'debt_gdp': 1, 'primary_balance': 1,  # BCB fiscal stats ~end of M+1
+                'bop_current': 1,                     # BCB external accounts ~end of M+1
+                'ibc_br': 2,                          # IBC-Br released ~mid M+2
+                'reer': 1, 'tot': 1,                  # BIS REER / terms-of-trade ~M+1
+            }
+            _shifted = []
+            for _name, _lag in _PUB_LAG_MONTHS.items():
+                if _lag > 0 and _name in self.monthly and len(self.monthly[_name]) > _lag:
+                    self.monthly[_name] = self.monthly[_name].shift(_lag)
+                    _shifted.append(f"{_name}+{_lag}")
+            if _shifted:
+                log(f"    publication lag applied: {', '.join(_shifted)}")
+
         return self
 
     def compute_instrument_returns(self):

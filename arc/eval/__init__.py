@@ -30,7 +30,9 @@ from arc.eval.gate import (
     carry_only_ic,
     carry_only_portfolio,
     cpcv_ic,
+    half_sample_carry_neutral_ic,
     promotion_report,
+    refit_oos_cpcv,
     residualize,
     sharpe_stats,
 )
@@ -43,5 +45,6 @@ __all__ = [
     "GovernanceLedger", "HoldoutToken", "HoldoutConsumedError",
     "promotion_report", "GateVerdict", "GateThresholds",
     "carry_neutralized_ic", "carry_only_ic", "carry_only_portfolio",
-    "cpcv_ic", "residualize", "sharpe_stats",
+    "cpcv_ic", "refit_oos_cpcv", "residualize", "sharpe_stats",
+    "half_sample_carry_neutral_ic",
 ]
