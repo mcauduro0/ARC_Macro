@@ -37,6 +37,7 @@ try:
     from arc.features import causal_annual_to_monthly as _arc_causal_annual_to_monthly
     from arc.eval import forward_returns as _arc_forward_returns
     from arc.regime import filtered_posteriors as _arc_filtered_posteriors
+    from arc.data.migrate import build_store_from_csv_dir as _arc_build_store_from_csv_dir
 except Exception:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
     from arc.causal import causal_winsorize as _causal_winsorize
@@ -44,6 +45,7 @@ except Exception:
     from arc.features import causal_annual_to_monthly as _arc_causal_annual_to_monthly
     from arc.eval import forward_returns as _arc_forward_returns
     from arc.regime import filtered_posteriors as _arc_filtered_posteriors
+    from arc.data.migrate import build_store_from_csv_dir as _arc_build_store_from_csv_dir
 
 
 def _forward_target(ret_series, horizon=1):
@@ -169,8 +171,37 @@ DEFAULT_CONFIG = {
 # ============================================================
 # 1. DATA LAYER
 # ============================================================
+# Phase 3.2 bitemporal spine: when enabled, load_series serves point-in-time views from a
+# BitemporalStore (gated by knowledge_time) instead of reading the flat CSV. load_series is the single
+# choke point for every CSV read in load_all, so flipping it routes the whole engine through as_of(t)
+# with no other change. Default disabled; at asof=latest it reproduces the CSVs (single vintage).
+_ASOF_STORE = None
+_ASOF_TS = None
+
+
+def enable_asof_spine(store, asof):
+    """Route subsequent load_series() calls through ``store.as_of_series(asof, name)``."""
+    global _ASOF_STORE, _ASOF_TS
+    _ASOF_STORE = store
+    _ASOF_TS = pd.Timestamp(asof)
+
+
+def disable_asof_spine():
+    global _ASOF_STORE, _ASOF_TS
+    _ASOF_STORE = None
+    _ASOF_TS = None
+
+
 def load_series(name):
-    """Load CSV from data dir, return DatetimeIndex Series."""
+    """Load CSV from data dir, return DatetimeIndex Series.
+
+    When the bitemporal spine is enabled (enable_asof_spine), serve the as-of view from the store so
+    only data with knowledge_time <= asof is visible (point-in-time). Behavior-preserving at asof=latest.
+    """
+    if _ASOF_STORE is not None:
+        s = _ASOF_STORE.as_of_series(_ASOF_TS, name)
+        s.index.name = 'date'
+        return s.sort_index()
     path = os.path.join(DATA_DIR, f"{name}.csv")
     if not os.path.exists(path):
         return pd.Series(dtype=float)
@@ -238,6 +269,24 @@ class DataLayer:
         log("DATA LAYER v2 — Loading market data")
         log("=" * 60)
 
+        # Phase 3.2: optionally route every CSV read through the bitemporal store's as_of(t) view.
+        # ARC_AS_OF_SPINE=1 builds the store from the CSV dir (publication lags from engine_catalog)
+        # and gates by knowledge_time. ARC_AS_OF_DATE (YYYY-MM-DD) sets the as-of cutoff; default is
+        # 'latest' (far future), which reproduces the flat CSVs (single vintage) — behavior-preserving.
+        _spine_on = os.environ.get("ARC_AS_OF_SPINE", "0") == "1"
+        if _spine_on:
+            _asof = os.environ.get("ARC_AS_OF_DATE", "")
+            _asof_ts = pd.Timestamp(_asof) if _asof else pd.Timestamp("2999-12-31")
+            self.store = _arc_build_store_from_csv_dir(DATA_DIR)
+            enable_asof_spine(self.store, _asof_ts)
+            log(f"    [as-of spine] enabled: {len(self.store)} observations, asof={_asof_ts.date()}")
+        try:
+            return self._load_all_impl()
+        finally:
+            if _spine_on:
+                disable_asof_spine()
+
+    def _load_all_impl(self):
         # FX
         self.data['spot'] = load_series('USDBRL')
         self.data['ptax'] = load_series('PTAX')
