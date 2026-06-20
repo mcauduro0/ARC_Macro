@@ -8,7 +8,9 @@ import pandas as pd
 
 from arc.research.sleeve import (
     causal_position,
+    momentum_signal,
     momentum_sleeve_returns,
+    signal_sleeve_returns,
     sleeve_stats,
 )
 
@@ -64,6 +66,45 @@ def test_costs_reduce_sharpe():
     gross = sleeve_stats(momentum_sleeve_returns(rs, cost_bps=0.0), n_trials=1)["sharpe_ann"]
     net = sleeve_stats(momentum_sleeve_returns(rs, cost_bps=20.0), n_trials=1)["sharpe_ann"]
     assert gross > net
+
+
+def test_signal_sleeve_equals_momentum_special_case():
+    """momentum_sleeve_returns is signal_sleeve_returns with signal = trailing momentum (refactor proof)."""
+    rng = np.random.default_rng(7)
+    n = 180
+    r = np.zeros(n)
+    for t in range(1, n):
+        r[t] = 0.4 * r[t - 1] + rng.normal(scale=0.02)
+    rs = pd.Series(r, index=_idx(n))
+    a = momentum_sleeve_returns(rs, lookback=3, cost_bps=2.0)
+    b = signal_sleeve_returns(momentum_signal(rs, 3), rs, cost_bps=2.0)
+    common = a.index.intersection(b.index)
+    assert len(common) == len(a)
+    assert (a.loc[common] - b.loc[common]).abs().max() < 1e-12
+
+
+def test_signal_sleeve_profits_on_predictive_signal():
+    """A signal that genuinely leads next month's return yields a profitable causal sleeve."""
+    rng = np.random.default_rng(8)
+    n = 240
+    sig = pd.Series(rng.normal(size=n), index=_idx(n))
+    # returns led by last month's signal + noise => the sleeve (position from signal) should profit
+    ret = pd.Series(0.02 * sig.shift(1).fillna(0.0).values + rng.normal(scale=0.01, size=n), index=_idx(n))
+    st = sleeve_stats(signal_sleeve_returns(sig, ret, cost_bps=2.0), n_trials=1)
+    assert st["sharpe_ann"] > 0.5
+
+
+def test_signal_sleeve_is_causal():
+    """Appending future data must not change any earlier sleeve return (position is point-in-time)."""
+    rng = np.random.default_rng(9)
+    n = 160
+    sig = pd.Series(rng.normal(size=n), index=_idx(n))
+    ret = pd.Series(rng.normal(scale=0.02, size=n), index=_idx(n))
+    full = signal_sleeve_returns(sig, ret, cost_bps=2.0)
+    short = signal_sleeve_returns(sig.iloc[:120], ret.iloc[:120], cost_bps=2.0)
+    common = short.index.intersection(full.index)
+    assert len(common) > 50
+    assert (full.reindex(common) - short.reindex(common)).abs().max() < 1e-12
 
 
 def test_vol_target_leverage_reported():

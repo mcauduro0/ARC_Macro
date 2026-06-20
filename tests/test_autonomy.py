@@ -34,10 +34,10 @@ from arc.autonomy.loop import run_loop
 from arc.autonomy.monitor import MonitorConfig, circuit_breaker, promotion_verdict
 from arc.autonomy.paper import forward_telemetry, reconcile, tick
 from arc.autonomy.source import knowledge_time, monthly_return_provider
-from arc.autonomy.spec import FROZEN_HASH, FROZEN_SPEC, strategy_hash
+from arc.autonomy.spec import FROZEN_HASH, FROZEN_SPEC, NOWCAST_SPEC, strategy_hash
 from arc.eval.gate import sharpe_stats
 from arc.eval.governance import HoldoutToken
-from arc.research.sleeve import momentum_sleeve_returns
+from arc.research.sleeve import momentum_sleeve_returns, signal_sleeve_returns
 
 
 # ----------------------------------------------------------------- fixtures
@@ -98,6 +98,38 @@ def test_forward_start_excludes_in_sample_months(tmp_path):
     months = [pd.Timestamp(m) for m in led.decisions()]
     assert months, "expected some forward decisions"
     assert all(m > cutoff for m in months)  # nothing at/before the cutoff was recorded
+
+
+def test_external_signal_tick_equivalence(tmp_path):
+    """The generic (external-signal) tick + reconcile rebuilds signal_sleeve_returns to 1e-9 — proving
+    the multi-strategy path (e.g. the nowcast) is as honest as the momentum path."""
+    r = _ar1(80, seed=11)
+    sig = _ar1(80, seed=12)  # an independent point-in-time signal (not derived from returns)
+    led = PaperLedger(tmp_path)
+    book_trial(led, spec=NOWCAST_SPEC, n_trials=55, sr_std=None, eval_at_n=24, dsr_min=0.5, issued_by="t")
+    for i in range(len(r)):
+        tick(r.index[i], r.iloc[: i + 1], led, spec=NOWCAST_SPEC, signal_through_K=sig.iloc[: i + 1], run_id="g")
+    reconcile(r.index[-1] + pd.Timedelta(days=5), r, led, spec=NOWCAST_SPEC)
+    fz = led.frozen_frame()
+    expected = signal_sleeve_returns(sig, r, z_window=12, clip_z=2.0, cost_bps=2.0)
+    common = fz.index.intersection(expected.index)
+    assert len(common) == len(expected)
+    assert (fz.loc[common, "sleeve_return"] - expected.loc[common]).abs().max() < 1e-9
+
+
+def test_run_loop_hosts_second_strategy(tmp_path):
+    """run_loop with a signal_provider hosts a non-momentum strategy (the nowcast) end to end."""
+    r = _ar1(60, seed=13)
+    sig = _ar1(60, seed=14)
+    led = PaperLedger(tmp_path)
+    book_trial(led, spec=NOWCAST_SPEC, n_trials=55, sr_std=None, eval_at_n=24, dsr_min=0.5, issued_by="t")
+    prov = monthly_return_provider(r, pub_lag_days=1)
+    sigprov = lambda asof: sig[sig.index <= pd.Timestamp(asof)]  # noqa: E731
+    out = None
+    for mo in r.index[20:]:
+        out = run_loop(mo + pd.Timedelta(days=2), prov, led, spec=NOWCAST_SPEC, signal_provider=sigprov)
+    assert out["proposal"]["strategy_hash"] == strategy_hash(NOWCAST_SPEC)
+    assert led.frozen_frame().shape[0] > 0
 
 
 def test_decision_keyed_to_next_month(tmp_path):

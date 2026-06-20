@@ -105,9 +105,39 @@ double-count. The fragility-to-inputs and ~one-bet caveats remain; forward paper
 3. Book it as a **new trial** in the Phase 7 paper loop (new `strategy_hash` ⇒ deflation bar rises) and
    accrue a forward holdout; promote only on a clean one-shot verdict.
 
+## Operationalized as a second causal sleeve + booked in the paper loop
+
+The nowcast is now a standalone causal sleeve and a second booked tenant of the Phase 7 paper loop —
+two complementary edges accruing forward holdouts in parallel.
+
+- **Generic sleeve** (`arc.research.signal_sleeve_returns`): the momentum sleeve generalized to any
+  oriented point-in-time signal (position = causal expanding z-score, earns `r[t+1]`, minus turnover
+  cost). `momentum_sleeve_returns` is now the special case with signal = trailing momentum.
+- **Sleeve report** (`scripts/nowcast_sleeve.py`, net 2bp, DSR deflated by **55** cumulative trials):
+
+  | sleeve | Sharpe | DSR(55) | maxDD | hit | lev@10% |
+  |---|---|---|---|---|---|
+  | **long/neg_nowcast_mom3** (booked) | +0.67 | **0.549** | −4.5% | 55% | 2.5× |
+  | belly/neg_nowcast | +0.66 | 0.535 | −7.1% | 61% | 2.4× |
+  | front/neg_nowcast_surprise | +0.62 | 0.472 (fail) | −1.2% | 55% | 20.7× |
+
+  Both belly and long clear the deflated bar; `long/neg_nowcast_mom3` wins on DSR, drawdown,
+  orthogonality-to-momentum and lag structure, so it is the booked spec. Unlike `front/mom3` (vol
+  0.68% ⇒ ~15× leverage), the nowcast sleeve has ~4% vol ⇒ ~2.5× leverage — a real diversifying sleeve.
+- **Multi-strategy paper loop:** `arc.autonomy` is now strategy-agnostic — `paper.tick` accepts an
+  external oriented signal (`signal_through_K`), `run_loop` takes a `signal_provider`, and there is a
+  second frozen spec `NOWCAST_SPEC` (`arc.autonomy.spec.SPECS`). Each strategy is a distinct booked
+  trial (distinct hash, its own deflation basis: momentum n_trials=45, nowcast n_trials=55) with its own
+  append-only ledger. `scripts/paper_loop.py --strategy nowcast --book/--catch-up/--verdict` runs it;
+  proven end-to-end (honest 0-holdout state today; verdict refused as not-ready). The generic tick path
+  is golden-equivalent to `signal_sleeve_returns` (CI test) — as honest as the momentum path.
+
 ## Delivered
 
 - `arc/features/nowcast.py` — `pit_dynamic_factor`, `nowcast_surprise`, `activity_nowcast` (pure, PIT).
+- `arc/research/sleeve.py` — `signal_sleeve_returns` (generic causal sleeve); `scripts/nowcast_sleeve.py`.
+- `arc/autonomy/` — multi-strategy: `NOWCAST_SPEC`/`SPECS`, `tick(signal_through_K=...)`,
+  `run_loop(signal_provider=...)`; `scripts/paper_loop.py --strategy {momentum,nowcast}`.
 - `tests/test_nowcast.py` — 5 CI-native tests (as-of-invariance leak gate, tracks-factor, ragged-edge,
   sign-orientation, causal surprise). 165 pytest green.
 - `scripts/edge_search_nowcast.py` — the gated round-2 search (cumulative-deflated).

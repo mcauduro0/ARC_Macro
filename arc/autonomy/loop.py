@@ -38,6 +38,7 @@ class LoopContext:
     vol_target: float
     run_id: str
     returns: Optional[pd.Series] = None
+    signal: Optional[pd.Series] = None   # external oriented signal (None => momentum from returns)
     circuit: Optional[CircuitState] = None
     decision: Optional[Decision] = None
     telemetry: Optional[ForwardTelemetry] = None
@@ -53,16 +54,22 @@ class Skill(Protocol):
 
 
 class ResearchSkill:
-    """Pull the causal as-of return slice and freeze the spec. (Agent seam: hypothesis proposal.)"""
+    """Pull the causal as-of return slice (and external signal, if any) and freeze the spec.
+    (Agent seam: hypothesis proposal.)"""
 
     name = "research"
 
-    def __init__(self, returns_provider: Callable[[pd.Timestamp], pd.Series]):
+    def __init__(self, returns_provider: Callable[[pd.Timestamp], pd.Series],
+                 signal_provider: Optional[Callable[[pd.Timestamp], pd.Series]] = None):
         self.returns_provider = returns_provider
+        self.signal_provider = signal_provider
 
     def run(self, ctx: LoopContext) -> LoopContext:
         ctx.returns = pd.Series(self.returns_provider(ctx.asof)).dropna()
-        ctx.logs.append(f"research: {len(ctx.returns)} return months as-of {ctx.asof.date()}")
+        if self.signal_provider is not None:
+            ctx.signal = pd.Series(self.signal_provider(ctx.asof))
+        ctx.logs.append(f"research: {len(ctx.returns)} return months as-of {ctx.asof.date()}"
+                        + ("" if ctx.signal is None else f"; signal n={len(ctx.signal.dropna())}"))
         return ctx
 
 
@@ -86,7 +93,7 @@ class SignalSkill:
     def run(self, ctx: LoopContext) -> LoopContext:
         halted = bool(ctx.circuit.halted) if ctx.circuit else False
         ctx.decision = tick(ctx.asof, ctx.returns, ctx.ledger, spec=ctx.spec, run_id=ctx.run_id,
-                            halted=halted, forward_start=ctx.forward_start)
+                            halted=halted, forward_start=ctx.forward_start, signal_through_K=ctx.signal)
         ctx.logs.append(
             f"signal: decision={'none(warmup)' if ctx.decision is None else round(ctx.decision.frozen_position, 3)}")
         return ctx
@@ -135,15 +142,18 @@ def run_loop(
     cfg: MonitorConfig = MonitorConfig(),
     vol_target: float = 0.10,
     reference_z: pd.Series | None = None,
+    signal_provider: Optional[Callable[[pd.Timestamp], pd.Series]] = None,
     run_id: str = "loop",
     code_version: str = "",
 ) -> dict:
-    """Run one deterministic loop tick and emit a Proposal (does NOT score the holdout)."""
+    """Run one deterministic loop tick and emit a Proposal (does NOT score the holdout). ``signal_provider``
+    supplies an external oriented point-in-time signal for non-momentum strategies (e.g. the nowcast); when
+    omitted the strategy is price momentum computed from the returns."""
     asof = pd.Timestamp(asof)
     basis = ledger.basis_for(strategy_hash(spec))
     ctx = LoopContext(asof=asof, ledger=ledger, spec=spec, cfg=cfg, vol_target=vol_target, run_id=run_id,
                       forward_start=(basis.forward_start if basis else None))
-    skills: list[Skill] = [ResearchSkill(returns_provider), RiskSkill(), SignalSkill(),
+    skills: list[Skill] = [ResearchSkill(returns_provider, signal_provider), RiskSkill(), SignalSkill(),
                            PortfolioSkill(reference_z)]
     for sk in skills:
         ctx = sk.run(ctx)

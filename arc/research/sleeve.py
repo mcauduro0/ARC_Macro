@@ -32,6 +32,31 @@ def causal_position(signal: pd.Series, z_window: int = 12, clip_z: float = 2.0) 
     return (z.clip(-clip_z, clip_z) / clip_z)
 
 
+def signal_sleeve_returns(
+    signal: pd.Series,
+    returns: pd.Series,
+    *,
+    z_window: int = 12,
+    clip_z: float = 2.0,
+    cost_bps: float = 2.0,
+) -> pd.Series:
+    """Net monthly return stream of a single-instrument sleeve driven by ANY point-in-time signal.
+
+    The signal is whatever oriented, decision-time series drives the position (price momentum, an
+    activity nowcast, a real-rate gap, ...). It is turned into a position via the same causal expanding
+    z-score, so a higher signal => a larger long position. ``sleeve[t] = position[t-1] * return[t] -
+    |position[t-1] - position[t-2]| * cost``. The signal MUST already be point-in-time (value at t uses
+    only data <= t); this function adds no look-ahead."""
+    r = pd.Series(returns).dropna()
+    sig = pd.Series(signal).reindex(r.index)
+    pos = causal_position(sig, z_window=z_window, clip_z=clip_z)
+    held = pos.shift(1)                      # decided last month, earns this month's return
+    gross = held * r
+    turnover = held.diff().abs()
+    cost = turnover * (cost_bps / 10000.0)
+    return (gross - cost).dropna()
+
+
 def momentum_sleeve_returns(
     returns: pd.Series,
     *,
@@ -43,15 +68,10 @@ def momentum_sleeve_returns(
     """Net monthly return stream of a single-instrument momentum sleeve (causal, costed).
 
     sleeve[t] = position[t-1] * return[t]  -  |position[t-1] - position[t-2]| * cost.
-    """
-    r = returns.dropna()
-    sig = momentum_signal(r, lookback)
-    pos = causal_position(sig, z_window=z_window, clip_z=clip_z)
-    held = pos.shift(1)                      # decided last month, earns this month's return
-    gross = held * r
-    turnover = held.diff().abs()
-    cost = turnover * (cost_bps / 10000.0)
-    return (gross - cost).dropna()
+    A special case of ``signal_sleeve_returns`` with signal = trailing return momentum."""
+    r = pd.Series(returns).dropna()
+    return signal_sleeve_returns(momentum_signal(r, lookback), r,
+                                 z_window=z_window, clip_z=clip_z, cost_bps=cost_bps)
 
 
 def sleeve_stats(returns: pd.Series, n_trials: int = 1, vol_target_ann: float | None = None) -> dict:

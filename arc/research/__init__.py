@@ -15,10 +15,12 @@ from arc.research.sleeve import (
     causal_position,
     momentum_signal,
     momentum_sleeve_returns,
+    signal_sleeve_returns,
     sleeve_stats,
 )
 
 __all__ = [
     "SignalThresholds", "evaluate_signal", "rank_signals",
-    "causal_position", "momentum_signal", "momentum_sleeve_returns", "sleeve_stats",
+    "causal_position", "momentum_signal", "momentum_sleeve_returns", "signal_sleeve_returns",
+    "sleeve_stats",
 ]

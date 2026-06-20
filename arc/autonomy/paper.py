@@ -69,17 +69,21 @@ def tick(
     run_id: str = "tick",
     halted: bool = False,
     forward_start: Optional[object] = None,
+    signal_through_K: Optional[pd.Series] = None,
 ) -> Optional[Decision]:
     """Record the decision for the month AFTER the latest known return month.
 
     ``returns_through_K`` MUST be the caller's as-of slice (knowledge_time <= asof) — the only
-    look-ahead boundary, owned by the caller. The position is ``causal_position(...).iloc[-1]`` (formed
-    at the end of month K), keyed to the month it earns (K+1). Returns None during warm-up. Idempotent:
-    a second tick for the same month is a no-op; a revised input raises ``DataRevisionError``.
-    ``halted`` (from the breaker) zeroes only the LIVE position; the frozen position is untouched.
-    ``forward_start`` is the holdout cutoff: a decision whose earned month is <= it is IN-SAMPLE and is
-    NOT recorded (returns None) — so in-sample history never leaks into the forward holdout ledger. The
-    full as-of history is still used to COMPUTE the position (the expanding window is legitimate)."""
+    look-ahead boundary, owned by the caller. ``signal_through_K`` is the OPTIONAL oriented, point-in-time
+    signal that drives the position (e.g. an activity nowcast); when omitted the strategy is price momentum
+    computed from the returns (``momentum_signal``). Either way the signal is turned into a position by the
+    same causal expanding z-score, and the decision is ``causal_position(...).iloc[-1]`` (formed at the end
+    of month K), keyed to the month it earns (K+1). Returns None during warm-up. Idempotent: a second tick
+    for the same month is a no-op; a revised input raises ``DataRevisionError``. ``halted`` (from the
+    breaker) zeroes only the LIVE position; the frozen position is untouched. ``forward_start`` is the
+    holdout cutoff: a decision whose earned month is <= it is IN-SAMPLE and is NOT recorded (returns None)
+    — so in-sample history never leaks into the forward holdout ledger. The full as-of history is still
+    used to COMPUTE the position (the expanding window is legitimate)."""
     h = strategy_hash(spec)
     if h not in ledger.booked_hashes():
         raise UnbookedTrialError(
@@ -89,11 +93,14 @@ def tick(
     if len(r) < int(spec["z_window"]):
         return None  # not enough history to form an expanding z-score
 
-    sig = momentum_signal(r, int(spec["lookback"]))
+    if signal_through_K is None:
+        sig = momentum_signal(r, int(spec["lookback"]))   # default strategy: price momentum
+    else:
+        sig = pd.Series(signal_through_K).reindex(r.index)  # external oriented signal (e.g. nowcast)
     pos = causal_position(sig, z_window=int(spec["z_window"]), clip_z=float(spec["clip_z"]))
     decision_pos = pos.iloc[-1]
     if pd.isna(decision_pos):
-        return None  # still warming up (lookback + z_window not jointly satisfied)
+        return None  # still warming up (window not yet satisfied, or signal missing at the edge)
 
     # pre-clip z, for drift monitoring
     mu = sig.expanding(min_periods=int(spec["z_window"])).mean()
@@ -118,7 +125,7 @@ def tick(
         signal=float(sig.iloc[-1]),
         signal_z=float(z.iloc[-1]) if not pd.isna(z.iloc[-1]) else float("nan"),
         data_max_knowledge_time=_iso(K),
-        input_digest=_digest(r),
+        input_digest=_digest(sig.dropna()),  # digest the decision DRIVER (momentum or external signal)
         run_id=run_id,
         created_at=_iso(asof),
     )

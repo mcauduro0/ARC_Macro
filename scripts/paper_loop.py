@@ -1,21 +1,24 @@
-"""Phase 7 — run the front/mom3 paper loop against the production engine's returns (local-only CLI).
+"""Phase 7 — run a gated edge's paper loop against the production engine (local-only CLI, multi-strategy).
 
-This is the engine-touching entrypoint (imports the heavy monolith, so it is NOT run in CI; the pure
-``arc.autonomy`` package + ``tests/test_autonomy.py`` carry the CI guarantees). It:
-  1. initializes the engine and reads the PIT monthly return for the 1Y receiver (``ret_df["front"]``);
-  2. wraps it with the CI-tested publication-lag boundary (``monthly_return_provider``) — the single
-     place look-ahead can enter — so a month-M return is invisible until M+lag;
-  3. runs the deterministic loop month-by-month (catch-up), persisting an append-only paper ledger and
-     emitting a human-approval Proposal for the latest month.
+Engine-touching entrypoint (imports the heavy monolith, so NOT run in CI; the pure ``arc.autonomy`` +
+``tests/test_autonomy.py`` carry the CI guarantees). It hosts EITHER booked edge:
 
-The forward stream this accumulates IS the reserved single-use holdout. Scoring it is a SEPARATE,
-human-gated step: ``--verdict`` (with a booked deflation basis + a human-issued token) fires the
-one-shot ``promotion_verdict`` only when exactly ``eval_at_n`` out-of-time months have accrued.
+  --strategy momentum  -> front/mom3 (FROZEN_SPEC): price momentum on the 1Y receiver (Phase 4.3).
+  --strategy nowcast   -> long/neg_nowcast_mom3 (NOWCAST_SPEC): the activity nowcast on the 10Y (Phase 4.4).
+
+For each it (1) reads the PIT monthly returns for the spec's instrument, wrapping them with the CI-tested
+publication-lag boundary (the only place look-ahead can enter); (2) for the nowcast, builds the strictly
+point-in-time activity factor and the oriented signal; (3) runs the deterministic loop month-by-month
+(catch-up), persisting an append-only paper ledger PER STRATEGY and emitting a human-approval Proposal.
+
+The forward stream each accrues IS that strategy's reserved single-use holdout. Scoring is a SEPARATE,
+human-gated step: ``--verdict`` fires the one-shot ``promotion_verdict`` only at exactly ``eval_at_n``
+out-of-time months. Each strategy is a distinct booked trial (distinct hash, its own deflation basis).
 
 Usage:
-  python scripts/paper_loop.py --book                  # human: book the trial + freeze the deflation bar
-  python scripts/paper_loop.py --catch-up              # accrue forward months + emit the latest proposal
-  python scripts/paper_loop.py --verdict               # one-shot promotion verdict (consumes the holdout)
+  python scripts/paper_loop.py --strategy nowcast --book                 # human: book trial + freeze basis
+  python scripts/paper_loop.py --strategy nowcast --catch-up             # accrue forward months + proposal
+  python scripts/paper_loop.py --strategy nowcast --verdict              # one-shot verdict (consumes holdout)
 """
 
 from __future__ import annotations
@@ -37,31 +40,46 @@ for _k, _v in {
 sys.path.insert(0, MODEL_DIR)
 sys.path.insert(0, ROOT)
 
-DEFAULT_STATE = os.path.join(ROOT, "state", "paper")
-N_TRIALS = 45          # Phase 4 multiple-testing count — the honest deflation penalty
-EVAL_AT_N = 24         # pre-committed forward sample size for the one-shot verdict
-DSR_MIN = 0.50         # pre-committed promotion bar (the in-sample screen cleared DSR(45)=0.53)
+EVAL_AT_N = 24         # pre-committed forward sample size for the one-shot verdict (both strategies)
+DSR_MIN = 0.50         # pre-committed promotion bar
+# per-strategy honest multiple-testing count: momentum screened 45, nowcast 55 (cumulative rounds 1+2)
+N_TRIALS = {"momentum": 45, "nowcast": 55}
 
 
-def _front_returns():
+def _engine_data():
     import macro_risk_os_v2 as eng  # noqa: E402
     print("[paper] initializing engine (PIT returns)...", file=sys.stderr)
     e = eng.ProductionEngine(eng.DEFAULT_CONFIG)
     e.initialize()
-    ret = e.data_layer.ret_df
-    if "front" not in ret.columns:
-        raise SystemExit("[paper] 'front' not in ret_df — cannot run the sleeve")
-    return ret["front"].dropna()
+    return e.data_layer.ret_df, e.data_layer.monthly
+
+
+def _build_signal(spec, monthly):
+    """The oriented, point-in-time signal for a nowcast spec (None for momentum -> loop uses returns)."""
+    if spec.get("kind") != "nowcast":
+        return None
+    from arc.features.nowcast import activity_nowcast, nowcast_surprise
+    factor = activity_nowcast(monthly, spec["inputs"], ref_col="ibc_br")
+    name = spec["signal"]
+    if name == "neg_nowcast":
+        return -factor
+    if name == "neg_nowcast_mom3":
+        return -factor.diff(3)
+    if name == "neg_nowcast_surprise":
+        return -nowcast_surprise(factor)
+    raise SystemExit(f"[paper] unknown nowcast signal '{name}'")
 
 
 def main() -> None:
     import pandas as pd  # noqa: E402
 
-    from arc.autonomy import PaperLedger, book_trial, issue_token, promotion_verdict, run_loop
+    from arc.autonomy import (PaperLedger, book_trial, issue_token, promotion_verdict, run_loop,
+                              FROZEN_SPEC, NOWCAST_SPEC)
     from arc.autonomy.source import knowledge_time, monthly_return_provider
 
-    ap = argparse.ArgumentParser(description="ARC front/mom3 paper loop")
-    ap.add_argument("--state-dir", default=DEFAULT_STATE)
+    ap = argparse.ArgumentParser(description="ARC gated-edge paper loop (multi-strategy)")
+    ap.add_argument("--strategy", choices=["momentum", "nowcast"], default="momentum")
+    ap.add_argument("--state-dir", default=None, help="default: state/paper/<strategy>")
     ap.add_argument("--asof", default=None, help="ISO date; default = latest knowable month")
     ap.add_argument("--forward-start", default=None,
                     help="ISO month-end research cutoff; only later months count as holdout "
@@ -74,43 +92,56 @@ def main() -> None:
     ap.add_argument("--issued-by", default="owner")
     args = ap.parse_args()
 
-    ledger = PaperLedger(args.state_dir)
-    front = _front_returns()
-    provider = monthly_return_provider(front, pub_lag_days=args.pub_lag_days)
+    spec = FROZEN_SPEC if args.strategy == "momentum" else NOWCAST_SPEC
+    inst = spec["instrument"]
+    n_trials = N_TRIALS[args.strategy]
+    state_dir = args.state_dir or os.path.join(ROOT, "state", "paper", args.strategy)
 
-    # The research cutoff: months at/before the last in-sample return are NOT holdout. Default = the
-    # latest data month at book time, so genuinely-new months (and only those) accrue to the holdout.
+    ledger = PaperLedger(state_dir)
+    ret_df, monthly = _engine_data()
+    if inst not in ret_df.columns:
+        raise SystemExit(f"[paper] '{inst}' not in ret_df — cannot run {args.strategy}")
+    rets = ret_df[inst].dropna()
+    provider = monthly_return_provider(rets, pub_lag_days=args.pub_lag_days)
+
+    signal = _build_signal(spec, monthly)
+    signal_provider = None
+    if signal is not None:
+        signal = pd.Series(signal).dropna()
+        signal_provider = lambda asof: signal[signal.index <= pd.Timestamp(asof)]  # noqa: E731
+
+    # research cutoff: months at/before the last in-sample return are NOT holdout (default = last data month)
     research_cutoff = (pd.Timestamp(args.forward_start) if args.forward_start
-                       else (front.index[-1] + pd.offsets.MonthEnd(0))).strftime("%Y-%m-%d")
+                       else (rets.index[-1] + pd.offsets.MonthEnd(0))).strftime("%Y-%m-%d")
 
     if args.book:
-        h = book_trial(ledger, n_trials=N_TRIALS, sr_std=None, eval_at_n=EVAL_AT_N,
+        h = book_trial(ledger, spec=spec, n_trials=n_trials, sr_std=None, eval_at_n=EVAL_AT_N,
                        dsr_min=DSR_MIN, forward_start=research_cutoff, issued_by=args.issued_by)
-        print(f"[paper] booked trial {h} | n_trials={N_TRIALS} sr_std=auto(Lo-2002) "
+        print(f"[paper] booked {args.strategy} ({inst}) {h} | n_trials={n_trials} sr_std=auto(Lo-2002) "
               f"eval_at_n={EVAL_AT_N} dsr_min={DSR_MIN} forward_start={research_cutoff}")
 
-    # the latest knowable month-end as-of "now" (or the explicit --asof)
-    last_known = knowledge_time(front.index[-1] + pd.offsets.MonthEnd(0), args.pub_lag_days)
+    last_known = knowledge_time(rets.index[-1] + pd.offsets.MonthEnd(0), args.pub_lag_days)
     asof = pd.Timestamp(args.asof) if args.asof else last_known
 
+    def _loop(at, run_id):
+        return run_loop(at, provider, ledger, spec=spec, vol_target=args.vol_target,
+                        signal_provider=signal_provider, run_id=run_id)
+
     if args.catch_up:
-        months = [m for m in front.index if knowledge_time(m, args.pub_lag_days) <= asof]
         out = None
-        for m in months:
-            run_asof = knowledge_time(m, args.pub_lag_days)
-            out = run_loop(run_asof, provider, ledger, vol_target=args.vol_target, run_id="paper-catchup")
+        for mo in [m for m in rets.index if knowledge_time(m, args.pub_lag_days) <= asof]:
+            out = _loop(knowledge_time(mo, args.pub_lag_days), "paper-catchup")
         if out is not None:
             print(json.dumps(out["proposal"], indent=2))
-        print(f"[paper] forward months accrued: {ledger.frozen_frame().shape[0]}", file=sys.stderr)
+        print(f"[paper] {args.strategy} forward months accrued: {ledger.frozen_frame().shape[0]}", file=sys.stderr)
     else:
-        out = run_loop(asof, provider, ledger, vol_target=args.vol_target, run_id="paper")
-        print(json.dumps(out["proposal"], indent=2))
+        print(json.dumps(_loop(asof, "paper")["proposal"], indent=2))
 
     if args.verdict:
-        tok = issue_token(issued_by=args.issued_by)
+        tok = issue_token(spec, issued_by=args.issued_by)
         try:
-            v = promotion_verdict(ledger, tok, asof=asof, run_id="paper-verdict")
-            print("\n[paper] PROMOTION VERDICT:")
+            v = promotion_verdict(ledger, tok, asof=asof, spec=spec, run_id="paper-verdict")
+            print(f"\n[paper] {args.strategy} PROMOTION VERDICT:")
             print(json.dumps(v, indent=2))
         except Exception as exc:  # noqa: BLE001 — surface the governance refusal verbatim
             print(f"\n[paper] verdict refused (by design): {type(exc).__name__}: {exc}", file=sys.stderr)
