@@ -55,6 +55,23 @@ def main() -> None:
     ret_df = e.data_layer.ret_df
     horizon = eng.DEFAULT_CONFIG.get("prediction_horizon_months", 1)
 
+    # (2) Momentum / trend family — a fresh signal family carrying NEW information (price history),
+    # not a recombination of the macro features that already failed. Time-series momentum (Moskowitz-
+    # Ooi-Pedersen) + 1-month reversal. Causal: signal[t] uses returns realized up to t (ret[t] is the
+    # return over (t-1, t], known at t) and predicts the forward return over (t, t+1].
+    import pandas as pd  # noqa: E402
+    mom_cols = {}
+    for inst in ret_df.columns:
+        r = ret_df[inst]
+        mom_cols[f"mom3_{inst}"] = r.rolling(3).sum()
+        mom_cols[f"mom6_{inst}"] = r.rolling(6).sum()
+        mom_cols[f"mom12_{inst}"] = r.rolling(12).sum()
+        mom_cols[f"rev1_{inst}"] = r  # last-month return (continuation vs reversal — sign tells)
+    feat_df = feat_df.join(pd.DataFrame(mom_cols), how="outer")
+    for inst in ret_df.columns:
+        CANDIDATES.setdefault(inst, [])
+        CANDIDATES[inst] = CANDIDATES[inst] + [f"mom3_{inst}", f"mom6_{inst}", f"mom12_{inst}", f"rev1_{inst}"]
+
     fwd = {inst: forward_returns(ret_df[inst], horizon) for inst in ret_df.columns}
 
     # Carry-neutralization must use each instrument's TRUE return-carry, not a mismatched feature.
