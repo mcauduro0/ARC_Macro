@@ -87,15 +87,24 @@ survives CPCV + DSR + half-sample decay. Treat H2 (~0.1–0.2) as the bar to bea
 - Pre-trade liquidity gate (days-to-liquidate under stress); order FSM + paper-fill simulator.
 
 ### Phase 7 — Autonomy, persistence, learning & skills *(the "autonomous self-learning" ask)*
-- **Persistence:** Postgres for the governance ledger (every trial), run manifests, model inventory,
-  realized PnL — state that survives restarts and accumulates learning.
-- **Scheduling/sensors (Dagster/Temporal):** daily ingest, regime-change sensor, freshness gates;
-  `research_daily` (recompute IC, log trials, propose refit on decay) and `portfolio_monthly` workflows.
-- **Agent/skill layer (`arc-agents`):** a Research→Signal→Risk→Portfolio→Execution loop (Claude-driven)
-  that proposes signals/allocations as **gated, human-approved** promotions — never auto-trading
-  un-gated alpha. Skills = reusable, audited tools the agent composes.
-- **Monitoring & feedback:** drift detectors (PSI/KS, IC decay), circuit breakers, PnL reconciliation
-  feeding back into the learning loop.
+**7.1–7.4 DONE** (`arc/autonomy/`, `docs/PHASE7_AUTONOMY_SPINE_2026-06.md`): the persistent, honest
+**paper loop** for the one gated edge (`front/mom3`) — the bridge from "validated edge" to a system that
+operates, persists, accrues the reserved single-use holdout, and feeds back. Built adversarial-first (a
+governance/look-ahead workflow caught real bugs — expanding-z recompute leak, `sleeve_stats` can't pass
+`sr_std`, in-memory governance resets — before any code). Delivered:
+- **Persistence:** append-only, checksummed, idempotent JSONL ledger (mirrors the bitemporal store's
+  discipline; durable governance: trial bookings, deflation basis, holdout consumption, verdicts).
+- **Two-stream architecture:** the breaker flattens only `live`; the verdict scores only the unbreakered
+  `frozen` stream (no left-tail truncation, no under-deflation, no re-peeking).
+- **Scheduling:** `scripts/paper_loop.py` (`--book`/`--catch-up`/`--verdict`) + a Dagster monthly schedule.
+- **Monitoring & feedback:** drift (PSI, non-binding), circuit breaker (live-only), and a one-shot,
+  pre-committed (`forward_start`/`eval_at_n`), NaN-fatal, deterministic-on-read **promotion verdict** that
+  reproduces the gate's exact deflation. Human-gated; agents cannot self-issue the holdout token.
+- 24 CI-native invariant tests (159 pytest green); proven end-to-end against the engine (honest 0-holdout
+  state today — no out-of-time data exists yet).
+
+**Still deferred (Phase 8 institutional wrap):** Postgres/Temporal/LangGraph; Claude-driven agents (the
+loop is the deterministic skeleton with clean skill seams); model inventory/MLflow.
 
 ### Phase 8 — Live/paper trading & governance
 Paper-trade the gated book end-to-end; reconcile fills/slippage; single-use holdout token for the one
