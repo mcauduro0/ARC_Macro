@@ -6,5 +6,6 @@ One implementation of each feature transform, pure and tested, that the engine d
 
 from arc.features.zscore import rolling_zscore
 from arc.features.staleness import bounded_ffill
+from arc.features.interpolation import causal_annual_to_monthly, linear_annual_to_monthly
 
-__all__ = ["rolling_zscore", "bounded_ffill"]
+__all__ = ["rolling_zscore", "bounded_ffill", "causal_annual_to_monthly", "linear_annual_to_monthly"]
