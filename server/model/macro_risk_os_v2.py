@@ -2637,25 +2637,40 @@ class RegimeModel:
             label_col='d_cds', level_name='Domestic'
         )
 
-        # Combine into single regime_probs DataFrame
+        # Combine into this refit's regime-probability vintage
         if global_prob_df is not None and domestic_prob_df is not None:
             common_idx = global_prob_df.index.intersection(domestic_prob_df.index)
-            self.regime_probs = pd.concat([
+            new_probs = pd.concat([
                 global_prob_df.reindex(common_idx),
                 domestic_prob_df.reindex(common_idx)
             ], axis=1)
         elif global_prob_df is not None:
-            self.regime_probs = global_prob_df
-            # Add default domestic probs
-            self.regime_probs['P_domestic_calm'] = 0.5
-            self.regime_probs['P_domestic_stress'] = 0.5
+            new_probs = global_prob_df.copy()
+            new_probs['P_domestic_calm'] = 0.5
+            new_probs['P_domestic_stress'] = 0.5
         elif domestic_prob_df is not None:
-            self.regime_probs = domestic_prob_df
-            self.regime_probs['P_carry'] = 0.33
-            self.regime_probs['P_riskoff'] = 0.33
-            self.regime_probs['P_stress'] = 0.33
+            new_probs = domestic_prob_df.copy()
+            new_probs['P_carry'] = 0.33
+            new_probs['P_riskoff'] = 0.33
+            new_probs['P_stress'] = 0.33
         else:
             log("  Both HMMs failed — using uniform priors")
+            new_probs = None
+
+        # Cross-refit leak fix: APPEND-ONLY. Each date is written ONCE (at the first refit whose as-of
+        # window reaches it) and is NEVER overwritten by a later refit's vintage. This removes the
+        # "repaint the past" look-ahead the audit verified (a later HMM refit moved past-date P_stress
+        # by ~0.5, contaminating the training feature history). ARC_REGIME_POINT_IN_TIME=0 restores the
+        # legacy full-history overwrite (measurement only). a-priori labeling (above) keeps the appended
+        # blocks semantically consistent with the frozen past.
+        if new_probs is not None:
+            _pit = os.environ.get("ARC_REGIME_POINT_IN_TIME", "1") != "0"
+            if _pit and self.regime_probs is not None and len(self.regime_probs) > 0:
+                new_only = new_probs[~new_probs.index.isin(self.regime_probs.index)]
+                if len(new_only) > 0:
+                    self.regime_probs = pd.concat([self.regime_probs, new_only]).sort_index()
+            else:
+                self.regime_probs = new_probs
 
         if self.regime_probs is not None and len(self.regime_probs) > 0:
             latest = self.regime_probs.iloc[-1]
@@ -2723,53 +2738,44 @@ class RegimeModel:
                 probs = hmm.predict_proba(obs_std.values)
             else:
                 probs = _arc_filtered_posteriors(hmm, obs_std.values)
-            states = hmm.predict(obs_std.values)
+
+            # State -> regime LABEL mapping. ARC_REGIME_POINT_IN_TIME (default on): label A-PRIORI by
+            # the HMM's FITTED means_ on the indicator column, so the label identity depends only on
+            # the model parameters (not a full-window Viterbi pass over the data) and is stable across
+            # refits — fixes the regime-3 "relabel the past" leak where a later refit reassigned the
+            # carry/stress/riskoff identity of past months. Legacy path = full-window Viterbi state means.
+            _pit = os.environ.get("ARC_REGIME_POINT_IN_TIME", "1") != "0"
+            if _pit and label_col in obs_df.columns:
+                lci = list(obs_df.columns).index(label_col)
+                order = list(np.argsort(hmm.means_[:, lci]))  # ascending fitted mean of the indicator
+            else:
+                states = hmm.predict(obs_std.values)
+                sm = {}
+                for s in range(n_states):
+                    mask = states == s
+                    sm[s] = obs_df.loc[mask, label_col].mean() if (mask.sum() > 0 and label_col in obs_df.columns) else s
+                order = sorted(range(n_states), key=lambda x: sm.get(x, 0))
 
             if n_states == 3:
-                # Label by VIX/label_col mean: lowest = carry, highest = riskoff, middle = stress
-                state_means = {}
-                for s in range(3):
-                    mask = states == s
-                    if mask.sum() > 0 and label_col in obs_df.columns:
-                        state_means[s] = obs_df.loc[mask, label_col].mean()
-                    else:
-                        state_means[s] = s
-
-                sorted_states = sorted(state_means.keys(), key=lambda x: state_means.get(x, 0))
-                label_map = {sorted_states[0]: 'carry', sorted_states[1]: 'stress', sorted_states[2]: 'riskoff'}
-
+                # lowest indicator = carry, middle = stress, highest = riskoff
+                label_map = {order[0]: 'carry', order[1]: 'stress', order[2]: 'riskoff'}
                 prob_df = pd.DataFrame(index=obs_df.index)
                 for s, label in label_map.items():
                     prob_df[f'P_{label}'] = probs[:, s]
-
                 if level_name == 'Global':
                     self.hmm_global = hmm
-
                 for label in ['carry', 'riskoff', 'stress']:
                     col = f'P_{label}'
                     if col in prob_df.columns:
                         dominant = (prob_df[col] > 0.5).sum()
                         log(f"    {level_name} {label:12s}: dominant in {dominant}/{len(prob_df)} months ({dominant/len(prob_df)*100:.1f}%)")
 
-            elif n_states == 2:
-                # Label by stress indicator: higher label_col mean = stress
-                state_means = {}
-                for s in range(2):
-                    mask = states == s
-                    if mask.sum() > 0 and label_col in obs_df.columns:
-                        state_means[s] = obs_df.loc[mask, label_col].mean()
-                    else:
-                        state_means[s] = s
-
-                sorted_states = sorted(state_means.keys(), key=lambda x: state_means.get(x, 0))
-                label_map = {sorted_states[0]: 'domestic_calm', sorted_states[1]: 'domestic_stress'}
-
+            else:  # n_states == 2: lowest indicator = calm, highest = stress
+                label_map = {order[0]: 'domestic_calm', order[1]: 'domestic_stress'}
                 prob_df = pd.DataFrame(index=obs_df.index)
                 for s, label in label_map.items():
                     prob_df[f'P_{label}'] = probs[:, s]
-
                 self.hmm_domestic = hmm
-
                 for label in ['domestic_calm', 'domestic_stress']:
                     col = f'P_{label}'
                     if col in prob_df.columns:
