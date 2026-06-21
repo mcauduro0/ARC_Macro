@@ -36,10 +36,17 @@ from arc.autonomy.monitor import (
     signal_psi,
 )
 from arc.autonomy.paper import forward_telemetry, reconcile, tick
-from arc.autonomy.spec import FROZEN_HASH, FROZEN_SPEC, NOWCAST_SPEC, SPECS, strategy_hash
+from arc.autonomy.spec import (
+    FROZEN_HASH,
+    FROZEN_SPEC,
+    HARD_PB_SPEC,
+    NOWCAST_SPEC,
+    SPECS,
+    strategy_hash,
+)
 
 __all__ = [
-    "FROZEN_SPEC", "FROZEN_HASH", "NOWCAST_SPEC", "SPECS", "strategy_hash",
+    "FROZEN_SPEC", "FROZEN_HASH", "NOWCAST_SPEC", "HARD_PB_SPEC", "SPECS", "strategy_hash",
     "PaperLedger", "Decision", "Realization", "DeflationBasis",
     "RepaintError", "LedgerIntegrityError", "DataRevisionError", "HoldoutConsumedError",
     "MissingDeflationBasisError", "UnbookedTrialError", "LookAheadError", "HoldoutNotReadyError",

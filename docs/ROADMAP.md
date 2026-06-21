@@ -80,13 +80,22 @@ survives CPCV + DSR + half-sample decay. Treat H2 (~0.1–0.2) as the bar to bea
   pending NTN-B/breakeven collection. See `docs/PHASE4_4_NOWCAST_EDGE_2026-06.md`.
 - **Round 3 (done, 4.5):** `hard` sovereign-spread search (17 hypotheses, true spread carry) → the
   headline refit-OOS ~0.33 was **carry-in-disguise** (confirmed dead); lone survivor `pb_momentum`
-  (fiscal) is borderline + lookback-fragile → **no new sleeve**. See `docs/PHASE4_5_BATCH_HARD_CONNECTORS_2026-06.md`.
+  (fiscal) was borderline + lookback-fragile → no sleeve at the time. See `docs/PHASE4_5_BATCH_HARD_CONNECTORS_2026-06.md`.
 - **Round 4 (done, 4.5):** NTN-B **real curve** — now gateable (connector collected 259mo of real yields)
   → **no survivors** (real-rate levels decay H1≫H2; breakevens fail).
-- **Connectors (done, 4.5):** new tested adapters for NTN-B (Tesouro), CFTC COT (BRL positioning), BCB
-  flows (IDP/portfolio); NTN-B (259mo) + CFTC (879 weekly) collected live; flows pending (BCB API 502).
-- Still open: regime-*conditional* alpha (only if OOS); collect BCB flows when the API recovers, then gate
-  positioning; re-test `pb_momentum` with more data + a longer global-risk control.
+- **Round 5 (done, 4.5b):** **positioning & flows** (CFTC BRL net-spec + IDP/portfolio flows) on fx + the
+  rates risk-channel, 14 hypotheses → **no survivors** (the one tease, `fx/portfolio_flow_z`, is H1≫H2
+  non-stationary). See `docs/PHASE4_5_PB_RETEST_POSITIONING_2026-06.md`.
+- **`pb_momentum` RE-TEST (done, 4.5b) → promoted to a 3rd candidate sleeve.** v1's only blocker was an
+  inconclusive global-risk control (US-HY too short, n=35). The v2 re-test with a LONG panel
+  (VIX+NFCI+US-term+Δcds, n=172) shows it is **not** risk-on/off (IC 0.116→0.115 after neutralization),
+  H2 +0.198, orthogonal to both edges, predictive. Caveats remain (diff 9/12 collapse; mid-sample
+  concentration), so it is **booked as a forward-paper candidate (`fiscal_hard`), not promoted to live.**
+- **Connectors (done, 4.5/4.5b):** tested adapters for NTN-B (Tesouro), CFTC COT (BRL positioning), BCB
+  flows (IDP/portfolio); NTN-B (259mo) + CFTC (879 weekly) collected; **BCB flows (376mo each) recovered
+  via a provenance-verified IPEADATA fallback while the SGS API is 502** (never a silent substitution).
+- Still open: regime-*conditional* alpha (only if OOS); when the BCB SGS API recovers, `collect_flows.py`
+  auto-prefers it; the three booked edges accrue forward paper toward the one-shot verdict (~2028-06).
 
 ### Phase 5 — Intelligence upgrades
 - Probabilistic forecasts (credible intervals) → confidence-scaled sizing.
@@ -101,8 +110,13 @@ survives CPCV + DSR + half-sample decay. Treat H2 (~0.1–0.2) as the bar to bea
 
 ### Phase 7 — Autonomy, persistence, learning & skills *(the "autonomous self-learning" ask)*
 **7.1–7.4 DONE** (`arc/autonomy/`, `docs/PHASE7_AUTONOMY_SPINE_2026-06.md`): the persistent, honest
-**paper loop** for the one gated edge (`front/mom3`) — the bridge from "validated edge" to a system that
-operates, persists, accrues the reserved single-use holdout, and feeds back. Built adversarial-first (a
+**paper loop**, now multi-strategy — it hosts **three booked candidate sleeves** (`front/mom3`,
+`nowcast long`, `fiscal_hard`/pb_momentum), each a distinct trial with its own hash, deflation basis, and
+single-use forward holdout. **7.2 (done, `docs/PHASE7_2_SCORING_RUNBOOK_2026-06.md`):** the loop scores
+ALL booked edges in one pass via `scripts/score_both_edges.py` (non-consuming readiness by default); today
+all three correctly REFUSE (`HoldoutNotReadyError 0<24`) — 0 out-of-time months exist, no fabrication.
+This is the bridge from "validated edge" to a system that operates, persists, accrues the reserved
+single-use holdout, and feeds back. Built adversarial-first (a
 governance/look-ahead workflow caught real bugs — expanding-z recompute leak, `sleeve_stats` can't pass
 `sr_std`, in-memory governance resets — before any code). Delivered:
 - **Persistence:** append-only, checksummed, idempotent JSONL ledger (mirrors the bitemporal store's
@@ -113,8 +127,8 @@ governance/look-ahead workflow caught real bugs — expanding-z recompute leak, 
 - **Monitoring & feedback:** drift (PSI, non-binding), circuit breaker (live-only), and a one-shot,
   pre-committed (`forward_start`/`eval_at_n`), NaN-fatal, deterministic-on-read **promotion verdict** that
   reproduces the gate's exact deflation. Human-gated; agents cannot self-issue the holdout token.
-- 24 CI-native invariant tests (159 pytest green); proven end-to-end against the engine (honest 0-holdout
-  state today — no out-of-time data exists yet).
+- CI-native invariant tests incl. the three-edge registry + fiscal-sleeve equivalence (204 pytest green);
+  proven end-to-end against the engine (honest 0-holdout state today — no out-of-time data exists yet).
 
 **Still deferred (Phase 8 institutional wrap):** Postgres/Temporal/LangGraph; Claude-driven agents (the
 loop is the deterministic skeleton with clean skill seams); model inventory/MLflow.

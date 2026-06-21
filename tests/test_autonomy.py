@@ -34,7 +34,14 @@ from arc.autonomy.loop import run_loop
 from arc.autonomy.monitor import MonitorConfig, circuit_breaker, promotion_verdict
 from arc.autonomy.paper import forward_telemetry, reconcile, tick
 from arc.autonomy.source import knowledge_time, monthly_return_provider
-from arc.autonomy.spec import FROZEN_HASH, FROZEN_SPEC, NOWCAST_SPEC, strategy_hash
+from arc.autonomy.spec import (
+    FROZEN_HASH,
+    FROZEN_SPEC,
+    HARD_PB_SPEC,
+    NOWCAST_SPEC,
+    SPECS,
+    strategy_hash,
+)
 from arc.eval.gate import sharpe_stats
 from arc.eval.governance import HoldoutToken
 from arc.research.sleeve import momentum_sleeve_returns, signal_sleeve_returns
@@ -402,3 +409,42 @@ def test_run_loop_is_deterministic(tmp_path):
     a = run_loop(asof, prov, led)["proposal"]
     b = run_loop(asof, prov, led)["proposal"]  # re-run, idempotent
     assert a == b
+
+
+# ----------------------------------------------------------------- registry: the three booked edges
+def test_specs_registry_holds_three_distinct_booked_edges():
+    """The multi-strategy paper loop hosts exactly three booked candidate sleeves, each with a DISTINCT
+    binding hash (changing any spec field forks a new trial). Locks the registry so an accidental spec
+    edit can never silently re-point a forward holdout."""
+    assert set(SPECS) == {"momentum_front", "nowcast_long", "fiscal_hard"}
+    assert SPECS["momentum_front"] is FROZEN_SPEC
+    assert SPECS["fiscal_hard"] is HARD_PB_SPEC
+    hashes = {name: strategy_hash(spec) for name, spec in SPECS.items()}
+    assert len(set(hashes.values())) == 3, f"hash collision across edges: {hashes}"
+    # the fiscal candidate's contract (Phase 4.5 re-test): primary-balance momentum on the sovereign spread
+    assert HARD_PB_SPEC["instrument"] == "hard"
+    assert HARD_PB_SPEC["kind"] == "fiscal_momentum"
+    assert HARD_PB_SPEC["lookback"] == 6
+    # every spec carries the fields tick() reads to form a position
+    for spec in SPECS.values():
+        for field in ("instrument", "kind", "z_window", "clip_z", "cost_bps"):
+            assert field in spec
+
+
+def test_fiscal_sleeve_runs_through_the_loop_with_an_external_signal(tmp_path):
+    """The fiscal candidate drives positions via an EXTERNAL oriented signal (primary_balance.diff(6)),
+    exactly like the nowcast — the loop/tick path is signal-kind-agnostic. Booking HARD_PB_SPEC and
+    feeding a signal_provider must accrue frozen decisions (no momentum fallback, no crash)."""
+    r = _ar1(60)
+    sig = r.rolling(6).sum()  # any oriented monthly signal aligned to the return index
+    led = PaperLedger(tmp_path)
+    book_trial(led, spec=HARD_PB_SPEC, n_trials=69, sr_std=0.07, eval_at_n=24, dsr_min=0.50,
+               issued_by="test")
+    prov = monthly_return_provider(r, pub_lag_days=1)
+    sigprov = lambda asof: sig[sig.index <= pd.Timestamp(asof)]  # noqa: E731
+    for m in r.index[20:]:
+        run_loop(m + pd.Timedelta(days=2), prov, led, spec=HARD_PB_SPEC,
+                 signal_provider=sigprov, vol_target=0.10)
+    fz = led.frozen_frame()
+    assert fz.shape[0] > 0
+    assert all(d.strategy_hash == strategy_hash(HARD_PB_SPEC) for d in led.decisions().values())

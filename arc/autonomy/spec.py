@@ -38,10 +38,32 @@ NOWCAST_SPEC: dict[str, Any] = {
     "cost_bps": 2.0,
 }
 
+# The third gated candidate (Phase 4.5 re-test): fiscal primary-balance momentum on the sovereign-spread
+# receiver (hard). Signal = 6-month change in the primary balance (fiscal consolidation momentum); an
+# improving primary balance tightens the sovereign spread, so the receiver gains (oriented POSITIVE). The
+# v1 verify left it "borderline" only because the global-risk control was inconclusive (US-HY history too
+# short, n=35<40); the v2 re-test with a LONG control panel (VIX+NFCI+US-term+Δcds, n=172) shows it is NOT
+# risk-on/off (IC 0.116 -> 0.115 after neutralizing the panel), survives carry, is orthogonal to both other
+# edges, predictive, and clears the gate's bar (H2 +0.198). RESIDUAL CAVEATS (why this is a CANDIDATE under
+# forward paper, not a claimed edge): the edge lives in short-to-mid windows — diff(9)/diff(12) collapse —
+# and its strength concentrates in the middle third (2015-2020 fiscal-crisis era), thinning recently. The
+# forward holdout exists to adjudicate exactly that residual doubt. See docs/PHASE4_5_PB_RETEST_POSITIONING_2026-06.md.
+HARD_PB_SPEC: dict[str, Any] = {
+    "instrument": "hard",
+    "kind": "fiscal_momentum",
+    "signal": "pb_mom6",
+    "inputs": ["primary_balance"],
+    "lookback": 6,
+    "z_window": 12,
+    "clip_z": 2.0,
+    "cost_bps": 2.0,
+}
+
 # Registry of booked strategies the multi-strategy paper loop can host (each accrues its own holdout).
 SPECS: dict[str, dict[str, Any]] = {
     "momentum_front": FROZEN_SPEC,
     "nowcast_long": NOWCAST_SPEC,
+    "fiscal_hard": HARD_PB_SPEC,
 }
 
 

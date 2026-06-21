@@ -5,6 +5,7 @@ Engine-touching entrypoint (imports the heavy monolith, so NOT run in CI; the pu
 
   --strategy momentum  -> front/mom3 (FROZEN_SPEC): price momentum on the 1Y receiver (Phase 4.3).
   --strategy nowcast   -> long/neg_nowcast_mom3 (NOWCAST_SPEC): the activity nowcast on the 10Y (Phase 4.4).
+  --strategy fiscal    -> hard/pb_mom6 (HARD_PB_SPEC): primary-balance momentum on the sovereign spread (Phase 4.5 re-test).
 
 For each it (1) reads the PIT monthly returns for the spec's instrument, wrapping them with the CI-tested
 publication-lag boundary (the only place look-ahead can enter); (2) for the nowcast, builds the strictly
@@ -40,10 +41,11 @@ for _k, _v in {
 sys.path.insert(0, MODEL_DIR)
 sys.path.insert(0, ROOT)
 
-EVAL_AT_N = 24         # pre-committed forward sample size for the one-shot verdict (both strategies)
+EVAL_AT_N = 24         # pre-committed forward sample size for the one-shot verdict (all strategies)
 DSR_MIN = 0.50         # pre-committed promotion bar
-# per-strategy honest multiple-testing count: momentum screened 45, nowcast 55 (cumulative rounds 1+2)
-N_TRIALS = {"momentum": 45, "nowcast": 55}
+# per-strategy honest multiple-testing count: momentum screened 45, nowcast 55 (cumulative rounds 1+2),
+# fiscal pb_momentum 69 (cumulative through round 3, the hard-spread search that surfaced it).
+N_TRIALS = {"momentum": 45, "nowcast": 55, "fiscal": 69}
 
 
 def _engine_data():
@@ -55,30 +57,43 @@ def _engine_data():
 
 
 def _build_signal(spec, monthly):
-    """The oriented, point-in-time signal for a nowcast spec (None for momentum -> loop uses returns)."""
-    if spec.get("kind") != "nowcast":
+    """The oriented, point-in-time signal that drives the position.
+
+    Returns None for price momentum (the loop derives it from returns). For the nowcast spec it builds the
+    activity factor; for the fiscal spec it is the L-month change in the primary balance (oriented POSITIVE:
+    improving primary balance -> spread tightens -> sovereign-spread receiver gains). The sleeve applies the
+    causal expanding z-score (z_window/clip_z from the spec) to whatever raw signal is returned here."""
+    kind = spec.get("kind")
+    if kind == "momentum":
         return None
-    from arc.features.nowcast import activity_nowcast, nowcast_surprise
-    factor = activity_nowcast(monthly, spec["inputs"], ref_col="ibc_br")
-    name = spec["signal"]
-    if name == "neg_nowcast":
-        return -factor
-    if name == "neg_nowcast_mom3":
-        return -factor.diff(3)
-    if name == "neg_nowcast_surprise":
-        return -nowcast_surprise(factor)
-    raise SystemExit(f"[paper] unknown nowcast signal '{name}'")
+    if kind == "fiscal_momentum":
+        pb = monthly.get("primary_balance")
+        if pb is None:
+            raise SystemExit("[paper] 'primary_balance' not in monthly — cannot run fiscal sleeve")
+        return pb.diff(int(spec.get("lookback", 6)))
+    if kind == "nowcast":
+        from arc.features.nowcast import activity_nowcast, nowcast_surprise
+        factor = activity_nowcast(monthly, spec["inputs"], ref_col="ibc_br")
+        name = spec["signal"]
+        if name == "neg_nowcast":
+            return -factor
+        if name == "neg_nowcast_mom3":
+            return -factor.diff(3)
+        if name == "neg_nowcast_surprise":
+            return -nowcast_surprise(factor)
+        raise SystemExit(f"[paper] unknown nowcast signal '{name}'")
+    raise SystemExit(f"[paper] unknown spec kind '{kind}'")
 
 
 def main() -> None:
     import pandas as pd  # noqa: E402
 
     from arc.autonomy import (PaperLedger, book_trial, issue_token, promotion_verdict, run_loop,
-                              FROZEN_SPEC, NOWCAST_SPEC)
+                              FROZEN_SPEC, NOWCAST_SPEC, HARD_PB_SPEC)
     from arc.autonomy.source import knowledge_time, monthly_return_provider
 
     ap = argparse.ArgumentParser(description="ARC gated-edge paper loop (multi-strategy)")
-    ap.add_argument("--strategy", choices=["momentum", "nowcast"], default="momentum")
+    ap.add_argument("--strategy", choices=["momentum", "nowcast", "fiscal"], default="momentum")
     ap.add_argument("--state-dir", default=None, help="default: state/paper/<strategy>")
     ap.add_argument("--asof", default=None, help="ISO date; default = latest knowable month")
     ap.add_argument("--forward-start", default=None,
@@ -92,7 +107,7 @@ def main() -> None:
     ap.add_argument("--issued-by", default="owner")
     args = ap.parse_args()
 
-    spec = FROZEN_SPEC if args.strategy == "momentum" else NOWCAST_SPEC
+    spec = {"momentum": FROZEN_SPEC, "nowcast": NOWCAST_SPEC, "fiscal": HARD_PB_SPEC}[args.strategy]
     inst = spec["instrument"]
     n_trials = N_TRIALS[args.strategy]
     state_dir = args.state_dir or os.path.join(ROOT, "state", "paper", args.strategy)
