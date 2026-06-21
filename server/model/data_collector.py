@@ -669,7 +669,7 @@ def collect_bcb():
         "BRAZIL_COMM_IDX":  27574,
         "PRIMARY_BALANCE":  5793,
         "IBC_BR":           24363,
-        "BOP_CURRENT":      22707,
+        "BOP_CURRENT":      22701,  # 22701 = Transações correntes - saldo, mensal, US$ mn (BPM6); was 22707 = balança comercial (trade balance) — WRONG. Confirmed: SGS 22701 matches IPEADATA PAN12_STC12 (Bacen/BP BPM6, Mensal, US$ mn) to the decimal across 14 months. NB: 23079 is current account as % of GDP (not US$ mn), do not use.
         # v2.3: Cupom cambial — use Swap DI x Dólar (BCB 7811-7815) for full coverage (1991-present)
         # These are the onshore USD interest rates implied by the FX swap market
         # Old series 3955/3956 were discontinued in 2012; 3954 only goes to 2024
