@@ -21,16 +21,25 @@ from typing import Callable, Iterable, Optional
 import pandas as pd
 
 from arc.contracts import SeriesContract
-from arc.data.adapters import Adapter, BcbFocusAdapter, BcbSgsAdapter, FredAdapter
+from arc.data.adapters import (
+    Adapter,
+    BcbFocusAdapter,
+    BcbSgsAdapter,
+    CftcCotAdapter,
+    FredAdapter,
+    TesouroNtnbAdapter,
+)
 from arc.data.catalog import all_contracts, get_contract
 from arc.data.observation import Observation
 from arc.data.store import BitemporalStore
 
 # source -> adapter factory. Extend here as new sources are added.
 ADAPTER_REGISTRY: dict[str, Callable[[], Adapter]] = {
-    "BCB_SGS": BcbSgsAdapter,
+    "BCB_SGS": BcbSgsAdapter,       # also serves the IDP/PORTFOLIO flow series (bcb_flows)
     "BCB_FOCUS": BcbFocusAdapter,
     "FRED": FredAdapter,
+    "TESOURO_TD": TesouroNtnbAdapter,  # NTN-B real-yield history (Tesouro Transparente)
+    "CFTC_COT": CftcCotAdapter,        # CFTC Commitments of Traders — BRL net speculative positioning
 }
 
 

@@ -45,6 +45,29 @@ _CATALOG: dict[str, SeriesContract] = {
         SeriesContract(series_id="US_CPI", source="FRED", source_code="CPIAUCSL", frequency="M",
                        unit="index", publication_lag_days=14, valid_min=0,
                        license="FRED terms", description="US CPI (CPIAUCSL)"),
+        # --- Tesouro Transparente (NTN-B real-yield history; Phase 4.5 connectors) ---
+        SeriesContract(series_id="NTNB_REAL_5Y", source="TESOURO_TD", source_code="Tesouro IPCA+",
+                       frequency="M", unit="pct", publication_lag_days=1, valid_min=-5, valid_max=20,
+                       license="Tesouro Transparente open data",
+                       description="NTN-B 5y constant-maturity real yield (Tesouro Direto)"),
+        SeriesContract(series_id="NTNB_REAL_10Y", source="TESOURO_TD", source_code="Tesouro IPCA+",
+                       frequency="M", unit="pct", publication_lag_days=1, valid_min=-5, valid_max=20,
+                       license="Tesouro Transparente open data",
+                       description="NTN-B 10y constant-maturity real yield (Tesouro Direto)"),
+        # --- CFTC Commitments of Traders (BRL net speculative positioning) ---
+        SeriesContract(series_id="CFTC_BRL_NET_SPEC", source="CFTC_COT", source_code="102741",
+                       frequency="W", unit="contracts", publication_lag_days=3,
+                       valid_min=-200000, valid_max=200000, license="CFTC public domain (US Gov)",
+                       description="CME Brazilian Real non-commercial net (Socrata 6dca-aqww)"),
+        # --- BCB SGS external flows (BPM6 monthly net, USD millions) ---
+        SeriesContract(series_id="IDP_FLOW", source="BCB_SGS", source_code="22885", frequency="M",
+                       unit="usd_mn", publication_lag_days=30, valid_min=-50000, valid_max=50000,
+                       allowed_revision_abs=5000, license="BCB open data",
+                       description="Foreign direct investment in country - net, monthly (SGS 22885)"),
+        SeriesContract(series_id="PORTFOLIO_FLOW", source="BCB_SGS", source_code="22924", frequency="M",
+                       unit="usd_mn", publication_lag_days=30, valid_min=-50000, valid_max=50000,
+                       allowed_revision_abs=5000, license="BCB open data",
+                       description="Foreign portfolio investment liabilities - net, monthly (SGS 22924)"),
     ]
 }
 

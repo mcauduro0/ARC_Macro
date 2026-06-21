@@ -78,8 +78,15 @@ survives CPCV + DSR + half-sample decay. Treat H2 (~0.1–0.2) as the bar to bea
   neutralization). Caveats: ~one bet, fragile to inputs, orthogonality-to-momentum unmeasured →
   candidate, not promotion. Real-curve track has **no historical data** (single 2024 snapshot) → deferred
   pending NTN-B/breakeven collection. See `docs/PHASE4_4_NOWCAST_EDGE_2026-06.md`.
-- Still open: regime-*conditional* alpha (only if OOS); `hard` (sovereign-spread) refit-OOS ~0.33;
-  positioning/flows (CFTC/IDP/portfolio series are wired but CSVs absent — collect them).
+- **Round 3 (done, 4.5):** `hard` sovereign-spread search (17 hypotheses, true spread carry) → the
+  headline refit-OOS ~0.33 was **carry-in-disguise** (confirmed dead); lone survivor `pb_momentum`
+  (fiscal) is borderline + lookback-fragile → **no new sleeve**. See `docs/PHASE4_5_BATCH_HARD_CONNECTORS_2026-06.md`.
+- **Round 4 (done, 4.5):** NTN-B **real curve** — now gateable (connector collected 259mo of real yields)
+  → **no survivors** (real-rate levels decay H1≫H2; breakevens fail).
+- **Connectors (done, 4.5):** new tested adapters for NTN-B (Tesouro), CFTC COT (BRL positioning), BCB
+  flows (IDP/portfolio); NTN-B (259mo) + CFTC (879 weekly) collected live; flows pending (BCB API 502).
+- Still open: regime-*conditional* alpha (only if OOS); collect BCB flows when the API recovers, then gate
+  positioning; re-test `pb_momentum` with more data + a longer global-risk control.
 
 ### Phase 5 — Intelligence upgrades
 - Probabilistic forecasts (credible intervals) → confidence-scaled sizing.
