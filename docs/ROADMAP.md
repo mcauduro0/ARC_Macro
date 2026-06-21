@@ -94,14 +94,22 @@ survives CPCV + DSR + half-sample decay. Treat H2 (~0.1–0.2) as the bar to bea
 - **Connectors (done, 4.5/4.5b):** tested adapters for NTN-B (Tesouro), CFTC COT (BRL positioning), BCB
   flows (IDP/portfolio); NTN-B (259mo) + CFTC (879 weekly) collected; **BCB flows (376mo each) recovered
   via a provenance-verified IPEADATA fallback while the SGS API is 502** (never a silent substitution).
-- Still open: regime-*conditional* alpha (only if OOS); when the BCB SGS API recovers, `collect_flows.py`
-  auto-prefers it; the three booked edges accrue forward paper toward the one-shot verdict (~2028-06).
+- Still open: regime-*conditional* alpha (only if OOS); the three booked edges accrue forward paper toward
+  the one-shot verdict (~2028-06) — now via an **autonomous monthly Task Scheduler job** (Phase 7.3). BCB SGS
+  has recovered, so `collect_flows.py` auto-uses the canonical source again; `BOP_CURRENT` corrected to the
+  current account (SGS 22701).
 
 ### Phase 5 — Intelligence upgrades
-- Probabilistic forecasts (credible intervals) → confidence-scaled sizing.
-- Meta-labeling (conviction classifier) for position sizing.
-- Online/adaptive selection & weights (warm-start, rolling refit) instead of batch.
-- r* credible intervals from the Kalman covariance.
+**First increment done (`docs/PHASE5_INTELLIGENCE_2026-06.md`):** `arc/intelligence/` — causal, leakage-safe
+(36 CI tests) **uncertainty** (split-conformal credible intervals + predictive vol), **confidence-scaled
+sizing**, and **meta-labeling** (López de Prado P(correct) for sizing). Built as *measured* infrastructure,
+not an alpha claim. `scripts/measure_intelligence.py` (deflated, leverage-invariant FLAT-vs-intelligence):
+**no broad sizing edge** — momentum_front & fiscal_hard show no improvement; `nowcast_long` +
+conformal-width confidence scaling is a **tentative in-sample** gain (deflated DSR 0.549→0.609) to confirm
+on forward paper, not a result. Also fixed `BOP_CURRENT` (SGS 22707 trade balance → **22701** current
+account, IPEADATA+live-value verified).
+- Still open: online/adaptive selection & weights (warm-start, rolling refit) instead of batch; r* credible
+  intervals from the Kalman covariance; confirm the nowcast confidence-sizing hypothesis on forward paper.
 
 ### Phase 6 — Portfolio & risk SOTA
 - VaR/ES hard pre-trade gates; DCC-GARCH / factor covariance (forward-looking correlation).
