@@ -68,33 +68,6 @@ def _engine_data():
     return e.data_layer.ret_df, e.data_layer.monthly
 
 
-def _build_signal(spec, monthly):
-    """The oriented, point-in-time signal driving the position (None for momentum -> loop uses returns).
-
-    Copied verbatim from scripts/paper_loop.py so the scheduled run, the CLI, and this harness all
-    reproduce the identical signal for every booked edge."""
-    kind = spec.get("kind")
-    if kind == "momentum":
-        return None
-    if kind == "fiscal_momentum":
-        pb = monthly.get("primary_balance")
-        if pb is None:
-            raise SystemExit("[score] 'primary_balance' not in monthly — cannot run fiscal sleeve")
-        return pb.diff(int(spec.get("lookback", 6)))
-    if kind == "nowcast":
-        from arc.features.nowcast import activity_nowcast, nowcast_surprise
-        factor = activity_nowcast(monthly, spec["inputs"], ref_col="ibc_br")
-        name = spec["signal"]
-        if name == "neg_nowcast":
-            return -factor
-        if name == "neg_nowcast_mom3":
-            return -factor.diff(3)
-        if name == "neg_nowcast_surprise":
-            return -nowcast_surprise(factor)
-        raise SystemExit(f"[score] unknown nowcast signal '{name}'")
-    raise SystemExit(f"[score] unknown spec kind '{kind}'")
-
-
 def _readiness(ledger, spec):
     """NON-CONSUMING readiness check: read the durable ledger and report n-accrued vs the pre-committed
     eval_at_n WITHOUT ever calling promotion_verdict (which would consume the single-use holdout).
@@ -152,7 +125,8 @@ def _print_table(rows) -> None:
 def main() -> None:
     import pandas as pd  # noqa: E402
 
-    from arc.autonomy import (PaperLedger, book_trial, issue_token, promotion_verdict, run_loop)
+    from arc.autonomy import (PaperLedger, book_trial, build_signal, issue_token, promotion_verdict,
+                              run_loop)
     from arc.autonomy.source import knowledge_time, monthly_return_provider
     from arc.autonomy.spec import SPECS, strategy_hash
 
@@ -196,7 +170,7 @@ def main() -> None:
         rets = ret_df[inst].dropna()
         provider = monthly_return_provider(rets, pub_lag_days=args.pub_lag_days)
 
-        signal = _build_signal(spec, monthly)
+        signal = build_signal(spec, monthly)
         signal_provider = None
         if signal is not None:
             signal = pd.Series(signal).dropna()

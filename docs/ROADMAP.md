@@ -115,6 +115,13 @@ survives CPCV + DSR + half-sample decay. Treat H2 (~0.1–0.2) as the bar to bea
 single-use forward holdout. **7.2 (done, `docs/PHASE7_2_SCORING_RUNBOOK_2026-06.md`):** the loop scores
 ALL booked edges in one pass via `scripts/score_both_edges.py` (non-consuming readiness by default); today
 all three correctly REFUSE (`HoldoutNotReadyError 0<24`) — 0 out-of-time months exist, no fabrication.
+**7.3 (done, `docs/PHASE7_3_AUTONOMOUS_ACCRUAL_2026-06.md`):** an always-on monthly accrual cycle
+(`scripts/monthly_accrual.py`: best-effort data refresh → flows → catch-up all 3 → durable
+`state/paper/accrual_log.jsonl`), installable via Windows Task Scheduler or the Dagster schedule; signal
+construction consolidated into one shared `arc.autonomy.build_signal` (a per-file copy had drifted and
+would have run `fiscal_hard` with price momentum). A `fiscal_hard` recency re-examination
+(`scripts/reexamine_fiscal_hard.py`) is an **orange flag** — last-36m carry-neutral IC negative (−0.170),
+`recency_ok=False`; kept as a forward-paper candidate (the OOS verdict will adjudicate), watched.
 This is the bridge from "validated edge" to a system that operates, persists, accrues the reserved
 single-use holdout, and feeds back. Built adversarial-first (a
 governance/look-ahead workflow caught real bugs — expanding-z recompute leak, `sleeve_stats` can't pass
@@ -127,8 +134,8 @@ governance/look-ahead workflow caught real bugs — expanding-z recompute leak, 
 - **Monitoring & feedback:** drift (PSI, non-binding), circuit breaker (live-only), and a one-shot,
   pre-committed (`forward_start`/`eval_at_n`), NaN-fatal, deterministic-on-read **promotion verdict** that
   reproduces the gate's exact deflation. Human-gated; agents cannot self-issue the holdout token.
-- CI-native invariant tests incl. the three-edge registry + fiscal-sleeve equivalence (204 pytest green);
-  proven end-to-end against the engine (honest 0-holdout state today — no out-of-time data exists yet).
+- CI-native invariant tests incl. the three-edge registry + fiscal-sleeve equivalence + shared build_signal
+  + SGS-recovery routing (211 pytest green); proven end-to-end against the engine (honest 0-holdout today).
 
 **Still deferred (Phase 8 institutional wrap):** Postgres/Temporal/LangGraph; Claude-driven agents (the
 loop is the deterministic skeleton with clean skill seams); model inventory/MLflow.

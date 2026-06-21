@@ -46,8 +46,11 @@ NOWCAST_SPEC: dict[str, Any] = {
 # risk-on/off (IC 0.116 -> 0.115 after neutralizing the panel), survives carry, is orthogonal to both other
 # edges, predictive, and clears the gate's bar (H2 +0.198). RESIDUAL CAVEATS (why this is a CANDIDATE under
 # forward paper, not a claimed edge): the edge lives in short-to-mid windows — diff(9)/diff(12) collapse —
-# and its strength concentrates in the middle third (2015-2020 fiscal-crisis era), thinning recently. The
-# forward holdout exists to adjudicate exactly that residual doubt. See docs/PHASE4_5_PB_RETEST_POSITIONING_2026-06.md.
+# and a recency re-examination (scripts/reexamine_fiscal_hard.py, 2026-06 baseline) is an ORANGE FLAG: the
+# last-36m carry-neutral IC is NEGATIVE (-0.170), pre-committed recency_ok=False. Booking is a forward-paper
+# commitment (immutable basis), NOT a live allocation: a recent edge this weak will simply fail the one-shot
+# forward verdict (that is the system working). Watch it. See docs/PHASE4_5_PB_RETEST_POSITIONING_2026-06.md
+# + docs/PHASE7_3_AUTONOMOUS_ACCRUAL_2026-06.md (recency watch).
 HARD_PB_SPEC: dict[str, Any] = {
     "instrument": "hard",
     "kind": "fiscal_momentum",

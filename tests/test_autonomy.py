@@ -448,3 +448,23 @@ def test_fiscal_sleeve_runs_through_the_loop_with_an_external_signal(tmp_path):
     fz = led.frozen_frame()
     assert fz.shape[0] > 0
     assert all(d.strategy_hash == strategy_hash(HARD_PB_SPEC) for d in led.decisions().values())
+
+
+def test_build_signal_is_the_single_source_of_truth_per_kind():
+    """Every front-end (CLI, readiness harness, monthly accrual, Dagster) builds each edge's signal via
+    the ONE shared `build_signal`. Momentum -> None (loop uses returns); fiscal -> primary_balance.diff(L);
+    unknown kind/input -> raises (fail loud, never silently fall back to a different strategy — the bug
+    that the per-file duplicate copies caused)."""
+    from arc.autonomy import build_signal
+    idx = pd.date_range("2010-01-31", periods=40, freq="ME")
+    pb = pd.Series(np.arange(40, dtype="float64"), index=idx)
+    monthly = {"primary_balance": pb}
+
+    assert build_signal(FROZEN_SPEC, monthly) is None              # momentum: derived from returns
+    fiscal = build_signal(HARD_PB_SPEC, monthly)                   # fiscal: pb.diff(lookback=6)
+    pd.testing.assert_series_equal(fiscal, pb.diff(6))
+
+    with pytest.raises(KeyError):                                  # missing required input -> loud
+        build_signal(HARD_PB_SPEC, {})
+    with pytest.raises(ValueError):                                # unknown kind -> loud
+        build_signal({"kind": "totally_unknown"}, monthly)
