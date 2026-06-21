@@ -56,40 +56,11 @@ def _engine_data():
     return e.data_layer.ret_df, e.data_layer.monthly
 
 
-def _build_signal(spec, monthly):
-    """The oriented, point-in-time signal that drives the position.
-
-    Returns None for price momentum (the loop derives it from returns). For the nowcast spec it builds the
-    activity factor; for the fiscal spec it is the L-month change in the primary balance (oriented POSITIVE:
-    improving primary balance -> spread tightens -> sovereign-spread receiver gains). The sleeve applies the
-    causal expanding z-score (z_window/clip_z from the spec) to whatever raw signal is returned here."""
-    kind = spec.get("kind")
-    if kind == "momentum":
-        return None
-    if kind == "fiscal_momentum":
-        pb = monthly.get("primary_balance")
-        if pb is None:
-            raise SystemExit("[paper] 'primary_balance' not in monthly — cannot run fiscal sleeve")
-        return pb.diff(int(spec.get("lookback", 6)))
-    if kind == "nowcast":
-        from arc.features.nowcast import activity_nowcast, nowcast_surprise
-        factor = activity_nowcast(monthly, spec["inputs"], ref_col="ibc_br")
-        name = spec["signal"]
-        if name == "neg_nowcast":
-            return -factor
-        if name == "neg_nowcast_mom3":
-            return -factor.diff(3)
-        if name == "neg_nowcast_surprise":
-            return -nowcast_surprise(factor)
-        raise SystemExit(f"[paper] unknown nowcast signal '{name}'")
-    raise SystemExit(f"[paper] unknown spec kind '{kind}'")
-
-
 def main() -> None:
     import pandas as pd  # noqa: E402
 
-    from arc.autonomy import (PaperLedger, book_trial, issue_token, promotion_verdict, run_loop,
-                              FROZEN_SPEC, NOWCAST_SPEC, HARD_PB_SPEC)
+    from arc.autonomy import (PaperLedger, book_trial, build_signal, issue_token, promotion_verdict,
+                              run_loop, FROZEN_SPEC, NOWCAST_SPEC, HARD_PB_SPEC)
     from arc.autonomy.source import knowledge_time, monthly_return_provider
 
     ap = argparse.ArgumentParser(description="ARC gated-edge paper loop (multi-strategy)")
@@ -119,7 +90,7 @@ def main() -> None:
     rets = ret_df[inst].dropna()
     provider = monthly_return_provider(rets, pub_lag_days=args.pub_lag_days)
 
-    signal = _build_signal(spec, monthly)
+    signal = build_signal(spec, monthly)
     signal_provider = None
     if signal is not None:
         signal = pd.Series(signal).dropna()

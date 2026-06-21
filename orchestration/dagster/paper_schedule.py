@@ -1,8 +1,10 @@
 """Dagster wrapper for the Phase 7 paper loop — a monthly schedule per booked strategy.
 
 Dagster is the canonical orchestrator for scheduled, lineage-tracked runs. This wraps the deterministic
-``arc.autonomy.run_loop`` so EACH booked edge in ``arc.autonomy.spec.SPECS`` (momentum_front + nowcast_long)
-gets its own asset and its own monthly schedule. The engine import is guarded: it lives inside the run body
+``arc.autonomy.run_loop`` so EACH booked edge in ``arc.autonomy.spec.SPECS`` (momentum_front, nowcast_long,
+fiscal_hard) gets its own asset and its own monthly schedule; each builds its signal through the single
+shared ``arc.autonomy.build_signal`` (so a scheduled run can never trade a different strategy than the
+booked one). The engine import is guarded: it lives inside the run body
 so ``defs`` still loads with the assets present but un-run (e.g. CI), and ``dagster`` definition-loading
 never needs the heavy monolith / its deps (xgboost, hmmlearn, ...).
 
@@ -32,25 +34,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 STATE_ROOT = os.path.join(ROOT, "state", "paper")
 
 
-def _build_signal(spec: dict, monthly: dict):
-    """Oriented, point-in-time signal for a nowcast spec (None for momentum -> loop uses returns).
-
-    Mirrors ``scripts/paper_loop.py:_build_signal`` so the scheduled run reproduces the CLI exactly."""
-    if spec.get("kind") != "nowcast":
-        return None
-    from arc.features.nowcast import activity_nowcast, nowcast_surprise
-
-    factor = activity_nowcast(monthly, spec["inputs"], ref_col="ibc_br")
-    name = spec["signal"]
-    if name == "neg_nowcast":
-        return -factor
-    if name == "neg_nowcast_mom3":
-        return -factor.diff(3)
-    if name == "neg_nowcast_surprise":
-        return -nowcast_surprise(factor)
-    raise ValueError(f"[paper] unknown nowcast signal '{name}'")
-
-
 def _run_paper_loop(name: str, spec: dict) -> dict:
     """Engine-touching body, imported lazily so definition-loading never needs the monolith.
 
@@ -64,7 +47,7 @@ def _run_paper_loop(name: str, spec: dict) -> dict:
     sys.path.insert(0, ROOT)
     import macro_risk_os_v2 as eng
 
-    from arc.autonomy import PaperLedger, run_loop
+    from arc.autonomy import PaperLedger, build_signal, run_loop
     from arc.autonomy.source import knowledge_time, monthly_return_provider
 
     e = eng.ProductionEngine(eng.DEFAULT_CONFIG)
@@ -76,7 +59,7 @@ def _run_paper_loop(name: str, spec: dict) -> dict:
     rets = e.data_layer.ret_df[inst].dropna()
     provider = monthly_return_provider(rets, pub_lag_days=1)
 
-    signal = _build_signal(spec, e.data_layer.monthly)
+    signal = build_signal(spec, e.data_layer.monthly)
     signal_provider = None
     if signal is not None:
         signal = pd.Series(signal).dropna()

@@ -29,8 +29,11 @@ with in-sample), so the out-of-time bar is never quietly weakened.
 > orthogonality to both other edges, and — the v1-open question now resolved — conclusive survival of a
 > long global-risk control (IC 0.116 → 0.115 after neutralizing VIX+NFCI+US-term+Δcds, n=172). Two residual
 > caveats keep it under forward paper rather than promoted: the edge lives in short-to-mid fiscal windows
-> (diff 9/12 collapse), and its strength concentrates in the 2015–2020 fiscal-crisis era (thin recently).
-> Booking it commits it to an honest out-of-time test, which is the disciplined way to adjudicate that doubt.
+> (diff 9/12 collapse), and a 2026-06 recency re-examination (`scripts/reexamine_fiscal_hard.py`) is an
+> **orange flag** — the last-36m carry-neutral IC is **negative (−0.170)**, pre-committed `recency_ok=False`
+> (see the recency-watch section of [`PHASE7_3_AUTONOMOUS_ACCRUAL_2026-06.md`](PHASE7_3_AUTONOMOUS_ACCRUAL_2026-06.md)).
+> Booking it commits it to an honest out-of-time test — a recent edge this weak will simply fail the forward
+> verdict, which is the disciplined way to adjudicate that doubt (no live allocation is implied).
 
 Each edge persists to its own append-only ledger under `state/paper/<key>`, where `<key>` follows
 `scripts/paper_loop.py`'s convention: **`state/paper/momentum`**, **`state/paper/nowcast`**, and

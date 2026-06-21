@@ -36,6 +36,7 @@ from arc.autonomy.monitor import (
     signal_psi,
 )
 from arc.autonomy.paper import forward_telemetry, reconcile, tick
+from arc.autonomy.signals import build_signal
 from arc.autonomy.spec import (
     FROZEN_HASH,
     FROZEN_SPEC,
@@ -54,4 +55,5 @@ __all__ = [
     "MonitorConfig", "CircuitState", "circuit_breaker", "detect_drift", "signal_psi", "promotion_verdict",
     "run_loop", "Proposal",
     "book_trial", "issue_token",
+    "build_signal",
 ]

@@ -29,7 +29,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from arc.contracts import SeriesContract
-from arc.data.adapters.bcb_sgs import BcbSgsAdapter
+from arc.data.adapters.bcb_sgs import BASE_URL, BcbSgsAdapter
 
 # BPM6 monthly external-sector flows are published "up to four weeks after the reference
 # period"; we floor the publication lag at 30 calendar days (same convention as the debt
@@ -150,6 +150,32 @@ def _contract_by_name(name: str) -> SeriesContract:
             return c
     have = [r["name"] for r in FLOW_SERIES]
     raise KeyError(f"no BCB flow series '{name}' (have: {have})")
+
+
+def sgs_is_up(timeout: float = 8) -> bool:
+    """Cheap, side-effect-free health probe of the BCB SGS endpoint.
+
+    Probes a known SMALL slice of a real flow series (the IDP code, last 1 obs) and
+    returns ``True`` only on an HTTP 200 whose body parses as JSON. Any failure — 502,
+    timeout, connection error, non-200, or unparseable body — returns ``False`` so the
+    caller can route to the provenance-verified IPEADATA fallback while SGS is down.
+
+    Network stays lazy (``requests`` imported inside). Does NOT raise: a probe is meant
+    to be observable, not fatal. The moment ``api.bcb.gov.br`` recovers this flips back to
+    ``True`` and the canonical SGS route is used again.
+    """
+    import requests  # lazy: keeps module import light for tests/CI
+
+    code = _contract_by_name("IDP_FLOW").source_code  # 22885 — a real, small flow series
+    url = BASE_URL.format(code=code)
+    try:
+        r = requests.get(url, params={"formato": "json", "ultimos": "1"}, timeout=timeout)
+        if r.status_code != 200:
+            return False
+        r.json()  # must parse as JSON to count as a healthy canonical response
+        return True
+    except Exception:  # noqa: BLE001 — any error (502/timeout/parse) means SGS is down
+        return False
 
 
 # ---------------------------------------------------------------------------
