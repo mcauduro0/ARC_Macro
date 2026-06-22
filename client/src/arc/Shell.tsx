@@ -17,7 +17,7 @@ export function Shell({ asOf, children }: { asOf?: string | null; children: Reac
   const [loc] = useLocation();
   return (
     <div className="arc-mesa flex flex-col min-h-screen">
-      <header className="flex items-center justify-between px-4 border-b mesa-divider" style={{ height: 44 }}>
+      <header className="mesa-topbar flex items-center justify-between px-4 border-b mesa-divider" style={{ height: 44 }}>
         <div className="flex items-center gap-2">
           <span className="mesa-h" style={{ fontWeight: 700, letterSpacing: "0.18em" }}>ARC</span>
           <span className="mesa-label">Macro · Risk OS</span>
@@ -31,9 +31,9 @@ export function Shell({ asOf, children }: { asOf?: string | null; children: Reac
           </span>
         </div>
       </header>
-      <div className="flex flex-1" style={{ minHeight: 0 }}>
-        <nav className="border-r mesa-divider" style={{ width: 152, flexShrink: 0 }}>
-          <div className="py-2">
+      <div className="mesa-shellbody">
+        <nav className="mesa-nav border-r mesa-divider">
+          <div className="mesa-navinner">
             {NAV.map((n) => {
               const active = n.href === "/" ? loc === "/" : loc.startsWith(n.href);
               return (
@@ -44,7 +44,7 @@ export function Shell({ asOf, children }: { asOf?: string | null; children: Reac
             })}
           </div>
         </nav>
-        <main className="flex-1 overflow-auto" style={{ padding: 18 }}>{children}</main>
+        <main className="mesa-main flex-1 overflow-auto" style={{ padding: 18, minWidth: 0 }}>{children}</main>
       </div>
     </div>
   );
