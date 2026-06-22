@@ -89,3 +89,27 @@
 
 .mesa-link { color: var(--amber); text-decoration: none; }
 .mesa-link:hover { text-decoration: underline; }
+
+/* layout primitives the Shell tags so the responsive rules below can target them */
+.mesa-shellbody { display: flex; flex: 1; min-height: 0; }
+.mesa-nav { width: 152px; flex-shrink: 0; }
+.mesa-navinner { padding: 8px 0; }
+
+/* ----- responsive: collapse the desk for tablet / phone ----- */
+@media (max-width: 760px) {
+  /* stack: the left rail becomes a horizontal, scrollable tab bar on top */
+  .mesa-shellbody { flex-direction: column; }
+  .mesa-nav { width: 100%; border-right: 0; border-bottom: 1px solid var(--line); }
+  .mesa-navinner { display: flex; overflow-x: auto; padding: 0; -webkit-overflow-scrolling: touch; }
+  .mesa-navlink { border-left: 0; border-bottom: 2px solid transparent; white-space: nowrap; padding: 10px 14px; }
+  .mesa-navlink.active { border-left: 0; border-bottom-color: var(--amber); }
+
+  /* the top bar wraps instead of clipping */
+  .mesa-topbar { height: auto !important; flex-wrap: wrap; gap: 6px; padding: 8px 12px; }
+
+  /* wide ledger/risk tables scroll horizontally inside their panel rather than overflowing the viewport */
+  .mesa-panel table { display: block; overflow-x: auto; white-space: nowrap; }
+
+  /* tighten the main padding on small screens */
+  .mesa-main { padding: 12px !important; }
+}
