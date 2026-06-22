@@ -9,6 +9,7 @@ import { Holdout } from "./pages/Holdout";
 import { Risk } from "./pages/Risk";
 import { Research } from "./pages/Research";
 import { Ledger } from "./pages/Ledger";
+import { Macro } from "./pages/Macro";
 import { Placeholder } from "./pages/Placeholder";
 import { useAutonomyState } from "./useAutonomy";
 
@@ -21,9 +22,7 @@ export default function ArcApp() {
         <Route path="/co-pilot" component={CoPilot} />
         <Route path="/holdout" component={Holdout} />
         <Route path="/risk" component={Risk} />
-        <Route path="/macro">
-          {() => <Placeholder area="Macro Engine" note="r* with credible intervals · regime probabilities · state variables · FX fair value · DI curve · nowcast" />}
-        </Route>
+        <Route path="/macro" component={Macro} />
         <Route path="/research" component={Research} />
         <Route path="/ledger" component={Ledger} />
         <Route>{() => <Placeholder area="Not found" note="No such area." />}</Route>

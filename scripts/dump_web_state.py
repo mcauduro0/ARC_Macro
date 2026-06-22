@@ -33,6 +33,160 @@ EVAL_AT_N = 24
 DSR_MIN = 0.50
 N_TRIALS = {"momentum": 45, "nowcast": 55, "fiscal_momentum": 69}
 
+# Curated state-variable labels — only those actually present in feature_df are emitted (never invented).
+_STATE_VAR_LABELS = {
+    "Z_real_diff": "real rate diff", "Z_fiscal": "fiscal stress", "Z_dxy": "global USD (DXY)",
+    "Z_vix": "global risk (VIX)", "Z_cds_br": "BR credit (CDS)", "Z_rstar_composite": "r* level",
+    "Z_beer": "FX misalignment (BEER)", "Z_reer_gap": "REER gap", "Z_term_premium": "term premium",
+    "Z_policy_gap": "policy gap (SELIC-SELIC*)", "Z_infl_surprise": "inflation surprise",
+    "Z_tot": "terms of trade",
+}
+_FX_SPOT_CANDIDATES = ("ptax", "usdbrl", "usd_brl", "brl", "brl_spot", "fx", "spot")
+_DI_TENORS = [("di_3m", "3M"), ("di_6m", "6M"), ("di_1y", "1Y"), ("di_2y", "2Y"),
+              ("di_3y", "3Y"), ("di_5y", "5Y"), ("di_10y", "10Y")]
+
+
+def _ts_date(ts) -> str:
+    d = getattr(ts, "date", None)
+    return str(d() if callable(d) else ts)
+
+
+def _monthly_keys(monthly) -> list:
+    """``data_layer.monthly`` may be a DataFrame OR a dict of Series — handle both."""
+    if monthly is None:
+        return []
+    if hasattr(monthly, "columns"):
+        return list(monthly.columns)
+    if isinstance(monthly, dict):
+        return list(monthly.keys())
+    return []
+
+
+def _monthly_series(monthly, name):
+    import pandas as pd
+    try:
+        if hasattr(monthly, "columns"):
+            if name in monthly.columns:
+                return pd.Series(monthly[name]).dropna()
+        elif isinstance(monthly, dict):
+            if name in monthly:
+                return pd.Series(monthly[name]).dropna()
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _extract_macro(e) -> dict:
+    """Defensive, HONEST extraction of macro engine context for the UI. Every field is emitted ONLY when it
+    is genuinely populated by the engine; otherwise it is null and a note records why. Critically: the regime
+    model is NOT fit by ``initialize()`` (it is fit lazily in ``step``), so we fit it explicitly here and
+    refuse to emit the unfit 1/3 placeholder. Nothing is fabricated; absence is reported as absence."""
+    import numpy as np
+    import pandas as pd
+
+    notes: list[str] = []
+    macro: dict = {"as_of": None, "rstar": None, "regime": None, "state_vars": None,
+                   "fx_fair": None, "di_curve": None, "notes": notes}
+    fe = getattr(e, "feature_engine", None)
+    dl = getattr(e, "data_layer", None)
+
+    # --- regime probabilities (must fit explicitly; initialize() leaves the model unfit) ---
+    try:
+        rm = getattr(e, "regime_model", None)
+        if rm is not None and getattr(rm, "regime_probs", None) is None and hasattr(rm, "fit"):
+            rm.fit()  # full-sample causal (filtered) fit; populates regime_probs
+        rp = getattr(rm, "regime_probs", None)
+        if rp is not None and len(rp) > 0:
+            num = rp.select_dtypes("number")
+            var_ok = num.shape[1] > 0 and float(np.nanstd(num.to_numpy())) > 1e-6
+            if var_ok:
+                latest = {k: round(float(v), 4) for k, v in rp.iloc[-1].items()
+                          if isinstance(v, (int, float, np.floating))}
+                hist = [{"date": _ts_date(ts),
+                         "probs": {k: round(float(v), 4) for k, v in row.items()
+                                   if isinstance(v, (int, float, np.floating))}}
+                        for ts, row in rp.tail(36).iterrows()]
+                macro["regime"] = {"latest": latest, "labels": list(latest.keys()), "history": hist}
+            else:
+                notes.append("regime: probabilities are the unfit/degenerate placeholder — omitted")
+        else:
+            notes.append("regime: regime_probs unavailable after fit — omitted")
+    except Exception as exc:  # noqa: BLE001 — never let macro extraction take the dump down
+        notes.append(f"regime: extraction failed ({type(exc).__name__}: {exc}) — omitted")
+
+    # --- composite r* (neutral real rate) ---
+    try:
+        rs = getattr(fe, "_composite_rstar", None)
+        if rs is not None and len(rs) > 0:
+            rs = pd.Series(rs).dropna()
+            if len(rs) > 0:
+                macro["rstar"] = {
+                    "latest": round(float(rs.iloc[-1]), 3), "unit": "% real (neutral rate)",
+                    "history": [[_ts_date(ts), round(float(v), 3)] for ts, v in rs.tail(36).items()]}
+        if macro["rstar"] is None:
+            notes.append("rstar: _composite_rstar unavailable — omitted")
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"rstar: extraction failed ({type(exc).__name__}: {exc}) — omitted")
+
+    # --- state variables (curated Z_ features that actually exist) ---
+    try:
+        fdf = getattr(fe, "feature_df", None)
+        if fdf is not None and len(fdf) > 0:
+            last = fdf.iloc[-1]
+            sv = [{"key": k, "label": lab, "value": round(float(last[k]), 3)}
+                  for k, lab in _STATE_VAR_LABELS.items()
+                  if k in fdf.columns and last[k] == last[k]]
+            macro["state_vars"] = sv or None
+            if not sv:
+                notes.append("state_vars: no curated Z_ features present — omitted")
+        else:
+            notes.append("state_vars: feature_df unavailable — omitted")
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"state_vars: extraction failed ({type(exc).__name__}: {exc}) — omitted")
+
+    # --- FX fair value vs spot ---
+    try:
+        fair = getattr(fe, "_fx_fair", None)
+        monthly = getattr(dl, "monthly", None)
+        spot = None
+        for cand in _FX_SPOT_CANDIDATES:
+            s = _monthly_series(monthly, cand)
+            if s is not None and len(s) > 0:
+                spot = float(s.iloc[-1]); break  # noqa: E702
+        if fair is not None and float(fair) == float(fair):
+            fairf = float(fair)
+            mis = round((spot / fairf - 1.0) * 100.0, 2) if (spot and fairf) else None
+            macro["fx_fair"] = {"fair": round(fairf, 4), "spot": (round(spot, 4) if spot else None),
+                                "misalignment_pct": mis}
+            if spot is None:
+                notes.append("fx_fair: spot not found among monthly keys — fair only")
+        else:
+            notes.append("fx_fair: _fx_fair unavailable — omitted")
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"fx_fair: extraction failed ({type(exc).__name__}: {exc}) — omitted")
+
+    # --- DI curve levels (only tenors present in monthly) ---
+    try:
+        monthly = getattr(dl, "monthly", None)
+        pts = []
+        for col, lab in _DI_TENORS:
+            s = _monthly_series(monthly, col)
+            if s is not None and len(s) > 0:
+                pts.append({"tenor": lab, "rate": round(float(s.iloc[-1]), 3)})
+        macro["di_curve"] = pts or None
+        if not pts:
+            keys = [str(k) for k in _monthly_keys(monthly)]
+            di_like = [k for k in keys if "di" in k.lower()][:8]
+            notes.append(f"di_curve: no di_* levels among monthly keys (di-like seen: {di_like}) — omitted")
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"di_curve: extraction failed ({type(exc).__name__}: {exc}) — omitted")
+
+    try:
+        macro["as_of"] = _ts_date(e.data_layer.ret_df.index[-1])
+    except Exception:  # noqa: BLE001
+        pass
+    return macro
+
 
 def main() -> None:
     from dataclasses import asdict
@@ -89,7 +243,7 @@ def main() -> None:
         "dumped_at": str(last_known.date()),  # stamp with the knowledge date (deterministic, repo norm)
         "data_through": data_through,
         "proposals": proposals,
-        "macro": None,  # engine macro context (r* CI, regime) — filled in a later phase
+        "macro": _extract_macro(e),  # honest, defensive engine context (real fields only; null otherwise)
     }
     out_dir = os.path.join(ROOT, "state", "web")
     os.makedirs(out_dir, exist_ok=True)
