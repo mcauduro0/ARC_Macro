@@ -187,11 +187,23 @@ nulls: more in-sample/macro history does NOT accelerate the forward verdict; the
 backtest-quality only (documented, NOT patched with synthetic data). Verdicts hardened to FAIL degenerate
 (near-zero-variance) forward streams. 22 new tests, 387 green.
 
+### Phase 7.5 — live pre-trade VaR/ES + covariance risk gate in the loop *(done)*
+`docs/PHASE7_5_PRETRADE_RISK_GATE_2026-06.md`. The optional Phase 6 item, delivered: `arc/autonomy/risk_gate.py`
+(`pretrade_leverage_gate` — Cornish-Fisher fat-tail VaR + ES cap; `portfolio_pretrade_gate` — book VaR from the
+causal DCC-GARCH/EWMA covariance forecast; `RiskLimits` pre-committed loss budget). Wired into `run_loop`
+(optional `risk_limits`) and the co-pilot CLI (`--var-limit`/`--es-limit`/`--no-risk-gate`): it caps the
+operational `sized_exposure` to `min(vol-target, VaR, ES leverage)` and **never touches the scored frozen / raw
+live ledger positions** (CI-proven byte-identical). Measured (`scripts/measure_pretrade_gate.py`): the default
+5.5% backstop is nearly transparent for the vol-controlled sleeves (book binds 6%); a tighter budget binds and
+dials vol & drawdown down proportionally (e.g. fiscal maxDD −15%→−13%) at a proportional return cost — an
+operational risk dial, NOT alpha; worst months are unchanged (trailing VaR can't predict surprises — the honest
+limit). 9 new tests, 396 green.
+
 ## Immediate next actions
 1. **Accrual is LIVE** — the 3 sleeves accrue monthly (Task Scheduler, next run 2026-07-02). The owner can now
-   operate as a **co-pilot**: `python scripts/copilot.py --propose` then `--decide`. As forward months land:
-   re-run `reexamine_fiscal_hard.py` + `confirm_sizing_forward.py`; the **pooled** holdout can verdict at 12
-   common months (~2027-07, ~1y before the singles).
-2. **Phases 5–6 complete** (intelligence + portfolio/risk/execution, all measured; baselines not beaten — honest).
-   Optional: wire VaR/ES + covariance as live pre-trade gates in the paper loop; add a liquidity-stress gate.
+   operate as a **co-pilot with the live VaR/ES gate on**: `python scripts/copilot.py --propose` then `--decide`.
+   As forward months land: re-run `reexamine_fiscal_hard.py` + `confirm_sizing_forward.py`; the **pooled** holdout
+   can verdict at 12 common months (~2027-07, ~1y before the singles).
+2. **Phases 5–6 complete + the live pre-trade VaR/ES gate** (all measured; baselines not beaten; the gate is risk
+   control, not alpha). Optional next: a liquidity / days-to-liquidate stress gate alongside the VaR gate.
 3. **Phase 8** when Postgres/Temporal are provisioned — follow the plan doc; keep the invariant suite green.

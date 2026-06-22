@@ -29,6 +29,7 @@ import pandas as pd
 from arc.autonomy.ledger import Decision, OperatorDecision, PaperLedger
 from arc.autonomy.loop import run_loop
 from arc.autonomy.monitor import MonitorConfig
+from arc.autonomy.risk_gate import RiskLimits, pretrade_leverage_gate
 from arc.autonomy.spec import FROZEN_SPEC, canonical_json, strategy_hash
 
 VALID_ACTIONS = ("APPROVE", "OVERRIDE", "SKIP")
@@ -58,6 +59,10 @@ class OperatorProposal:
     operator_pnl: dict = field(default_factory=dict)
     proposal_digest: str = ""
     note: str = ""
+    var_forecast: float = float("nan")   # sized-book monthly VaR at the applied (gated) leverage
+    es_forecast: float = float("nan")    # sized-book monthly ES
+    risk_gate_binding: str = ""          # which limit bound the size (vol_target/var_limit/es_limit/inactive)
+    risk_gate_active: bool = False
 
 
 # ----------------------------------------------------------------- helpers
@@ -115,13 +120,15 @@ def propose(
     vol_target: float = 0.10,
     cfg: Optional[MonitorConfig] = None,
     reference_z: Optional[pd.Series] = None,
+    risk_limits: Optional[RiskLimits] = None,
     strategy: str = "",
     run_id: str = "copilot-propose",
 ) -> OperatorProposal:
     """Advance the deterministic loop to ``asof`` and return the human-facing proposal for the latest
     decidable month. Advancing the loop accrues the frozen + live streams (the holdout grows whether or
     not the human acts — that is the design); the human only influences the SEPARATE operator stream,
-    via ``decide``. Idempotent on identical data.
+    via ``decide``. Idempotent on identical data. ``risk_limits`` (optional) turns on the live pre-trade
+    VaR/ES gate that caps the proposed sized exposure to the loss budget (operational only).
 
     Revision-robust: if the latest forward month is ALREADY recorded and live data has since revised,
     the anti-repaint guard (``DataRevisionError``) fires — that is correct (a booked holdout decision is
@@ -134,7 +141,8 @@ def propose(
     warnings: list[str] = []
     try:
         out = run_loop(asof, returns_provider, ledger, spec=spec, cfg=cfg, vol_target=vol_target,
-                       signal_provider=signal_provider, reference_z=reference_z, run_id=run_id)
+                       signal_provider=signal_provider, reference_z=reference_z, risk_limits=risk_limits,
+                       run_id=run_id)
     except DataRevisionError as exc:
         warnings.append(f"DATA REVISED since the recorded decision -- holdout is LOCKED, not repainted ({exc})")
 
@@ -168,8 +176,21 @@ def propose(
         reasons = list(prop["circuit_reasons"])
         drift = list(prop["drift_warnings"])
         n_frozen = int(prop["n_forward_months"])
+        var_fc = float(prop.get("var_forecast", float("nan")))
+        es_fc = float(prop.get("es_forecast", float("nan")))
+        gate_binding = str(prop.get("risk_gate_binding", ""))
+        gate_active = bool(prop.get("risk_gate_active", False))
     else:  # revision fallback — build from the locked decision + a fresh operational context
         circuit, tel, leverage = _operational_context(ledger, cfg, vol_target)
+        var_fc, es_fc, gate_binding, gate_active = float("nan"), float("nan"), "", False
+        if risk_limits is not None:  # re-apply the live gate on the locked decision (operational only)
+            fz = ledger.frozen_frame()
+            rr = (fz["sleeve_return"] if "sleeve_return" in getattr(fz, "columns", [])
+                  else pd.Series(dtype="float64"))
+            gstate = pretrade_leverage_gate(rr, requested_leverage=leverage, limits=risk_limits)
+            leverage = gstate.applied_leverage
+            var_fc, es_fc = gstate.var_at_applied, gstate.es_at_applied
+            gate_binding, gate_active = gstate.binding, bool(gstate.active)
         halted = bool(circuit.halted)
         reasons = list(circuit.reasons)
         action_suggestion = "HALT" if halted else "OPERATE"
@@ -187,7 +208,10 @@ def propose(
         operator_pnl=_stream_summary(ledger.operator_frame()),
         proposal_digest=_proposal_digest(d),
         note="Proposal only — APPROVE/OVERRIDE/SKIP feeds the operator stream; the frozen holdout is "
-             "untouchable and accrues deterministically toward the one-shot verdict.")
+             "untouchable and accrues deterministically toward the one-shot verdict.",
+        var_forecast=float(var_fc) if var_fc == var_fc else float("nan"),
+        es_forecast=float(es_fc) if es_fc == es_fc else float("nan"),
+        risk_gate_binding=gate_binding, risk_gate_active=gate_active)
 
 
 # ----------------------------------------------------------------- decide

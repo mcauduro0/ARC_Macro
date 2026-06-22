@@ -24,6 +24,7 @@ import pandas as pd
 from arc.autonomy.ledger import Decision, PaperLedger, RunManifest
 from arc.autonomy.monitor import CircuitState, MonitorConfig, circuit_breaker, detect_drift
 from arc.autonomy.paper import ForwardTelemetry, forward_telemetry, reconcile, tick
+from arc.autonomy.risk_gate import RiskLimits, pretrade_leverage_gate
 from arc.autonomy.spec import FROZEN_SPEC, strategy_hash
 
 
@@ -131,6 +132,10 @@ class Proposal:
     n_forward_months: int
     human_approval_required: bool
     note: str
+    var_forecast: float = float("nan")     # sized-book monthly VaR at the applied leverage (gate on)
+    es_forecast: float = float("nan")      # sized-book monthly ES at the applied leverage
+    risk_gate_binding: str = ""            # "vol_target" | "var_limit" | "es_limit" | "inactive" | ""
+    risk_gate_active: bool = False
 
 
 def run_loop(
@@ -143,12 +148,15 @@ def run_loop(
     vol_target: float = 0.10,
     reference_z: pd.Series | None = None,
     signal_provider: Optional[Callable[[pd.Timestamp], pd.Series]] = None,
+    risk_limits: Optional[RiskLimits] = None,
     run_id: str = "loop",
     code_version: str = "",
 ) -> dict:
     """Run one deterministic loop tick and emit a Proposal (does NOT score the holdout). ``signal_provider``
     supplies an external oriented point-in-time signal for non-momentum strategies (e.g. the nowcast); when
-    omitted the strategy is price momentum computed from the returns."""
+    omitted the strategy is price momentum computed from the returns. ``risk_limits`` (optional) turns on the
+    live pre-trade VaR/ES gate: it caps the operational leverage (``sized_exposure``) to the pre-committed
+    loss budget — it NEVER touches the frozen/live ledger positions, so the scored holdout is unaffected."""
     asof = pd.Timestamp(asof)
     basis = ledger.basis_for(strategy_hash(spec))
     ctx = LoopContext(asof=asof, ledger=ledger, spec=spec, cfg=cfg, vol_target=vol_target, run_id=run_id,
@@ -162,6 +170,24 @@ def run_loop(
     halted = bool(ctx.circuit.halted) if ctx.circuit else False
     live_vol = tel.live_ann_vol if tel else float("nan")
     leverage = float(vol_target / live_vol) if (live_vol and not np.isnan(live_vol) and live_vol > 0) else float("nan")
+
+    # LIVE PRE-TRADE RISK GATE (operational only): cap leverage so the sized book's monthly VaR/ES stay
+    # within the pre-committed budget. Risk is estimated from the raw FROZEN sleeve returns (causal; reading
+    # the holdout's realized returns to SIZE is fine — only the reverse, operations changing the score, is
+    # forbidden). It rewrites ONLY `leverage`/`sized` below; the frozen & live ledger positions are untouched.
+    gate_active, gate_binding = False, ""
+    var_fc, es_fc = float("nan"), float("nan")
+    if risk_limits is not None:
+        risk_hist = ctx.ledger.frozen_frame()
+        risk_rets = (risk_hist["sleeve_return"] if "sleeve_return" in getattr(risk_hist, "columns", [])
+                     else pd.Series(dtype="float64"))
+        gstate = pretrade_leverage_gate(risk_rets, requested_leverage=leverage, limits=risk_limits)
+        leverage = gstate.applied_leverage
+        gate_active, gate_binding = bool(gstate.active), gstate.binding
+        var_fc, es_fc = gstate.var_at_applied, gstate.es_at_applied
+        if gstate.reasons:
+            ctx.logs.append("risk_gate: " + "; ".join(gstate.reasons))
+
     if ctx.decision is None:
         action, frozen_pos, live_pos = "HOLD(warmup)", float("nan"), float("nan")
     elif halted:
@@ -185,6 +211,10 @@ def run_loop(
         n_forward_months=int(tel.n_frozen) if tel else 0,
         human_approval_required=True,
         note="Proposal only — a human approves operation; promotion is a separate token-gated verdict.",
+        var_forecast=float(var_fc) if var_fc == var_fc else float("nan"),
+        es_forecast=float(es_fc) if es_fc == es_fc else float("nan"),
+        risk_gate_binding=gate_binding,
+        risk_gate_active=gate_active,
     )
 
     appended = [] if ctx.decision is None else [[PaperLedger.DECISIONS, "decision"]]

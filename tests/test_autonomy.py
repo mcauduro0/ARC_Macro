@@ -408,7 +408,8 @@ def test_run_loop_is_deterministic(tmp_path):
     asof = r.index[40] + pd.Timedelta(days=2)
     a = run_loop(asof, prov, led)["proposal"]
     b = run_loop(asof, prov, led)["proposal"]  # re-run, idempotent
-    assert a == b
+    # JSON-compare so identical NaN fields (e.g. the gate-off VaR forecast) count as equal (NaN != NaN)
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
 
 # ----------------------------------------------------------------- registry: the three booked edges

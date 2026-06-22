@@ -94,35 +94,46 @@ def _build(name, spec, ret_df, monthly, *, state_root, pub_lag_days, forward_sta
     return ledger, provider, signal_provider, last_known, knowable
 
 
-def _advance_and_propose(name, spec, built, vol_target):
+def _advance_and_propose(name, spec, built, vol_target, risk_limits=None):
     """Catch up the deterministic loop over all knowable months (idempotent) and return the final
-    OperatorProposal for the latest decidable month."""
+    OperatorProposal for the latest decidable month. ``risk_limits`` turns on the live VaR/ES gate."""
     from arc.autonomy.copilot import propose
 
     ledger, provider, signal_provider, asof, knowable = built
     p = None
     for at in knowable:
         p = propose(at, provider, ledger, spec=spec, signal_provider=signal_provider,
-                    vol_target=vol_target, strategy=name, run_id="copilot")
+                    vol_target=vol_target, risk_limits=risk_limits, strategy=name, run_id="copilot")
     if p is None:  # no knowable months at all
         p = propose(asof, provider, ledger, spec=spec, signal_provider=signal_provider,
-                    vol_target=vol_target, strategy=name, run_id="copilot")
+                    vol_target=vol_target, risk_limits=risk_limits, strategy=name, run_id="copilot")
     return p
 
 
+def _pct(x):
+    return f"{x * 100:.1f}%" if x == x else "n/a"  # x==x is False for NaN
+
+
 def _print_proposals(rows):
-    cols = ["strategy", "month", "suggest", "frozen_pos", "proposed", "sized", "halted", "fwd_n", "decided"]
-    widths = [14, 12, 12, 11, 9, 8, 7, 6, 8]
+    cols = ["strategy", "month", "suggest", "frozen", "proposed", "sized", "VaR95", "gate", "halt", "fwd_n"]
+    widths = [14, 11, 8, 8, 8, 7, 7, 11, 5, 6]
     sep = "+".join("-" * (w + 2) for w in widths)
     print("\n" + sep)
     print("|".join(f" {c:<{w}} " for c, w in zip(cols, widths)))
     print(sep)
     for r in rows:
+        if r["gate_active"]:
+            gate = r["gate_binding"] or "-"           # vol_target / var_limit / es_limit
+        elif r["gate_binding"] == "inactive":
+            gate = "wait(<24m)"                        # enabled but not enough forward history yet
+        else:
+            gate = "off"                               # disabled (--no-risk-gate)
         cells = [r["strategy"], r["month"] or "(warmup)", r["suggest"],
                  f"{r['frozen_pos']:.3f}" if r["frozen_pos"] == r["frozen_pos"] else "nan",
                  f"{r['proposed']:.3f}" if r["proposed"] == r["proposed"] else "nan",
                  f"{r['sized']:.2f}" if r["sized"] == r["sized"] else "nan",
-                 "YES" if r["halted"] else "no", str(r["fwd_n"]), "YES" if r["decided"] else "no"]
+                 _pct(r["var_forecast"]), gate,
+                 "YES" if r["halted"] else "no", str(r["fwd_n"])]
         print("|".join(f" {str(c):<{w}} " for c, w in zip(cells, widths)))
     print(sep)
 
@@ -150,8 +161,15 @@ def main() -> None:
     ap.add_argument("--forward-start", default=None, help="ISO research cutoff (default: last in-sample month)")
     ap.add_argument("--vol-target", type=float, default=0.10)
     ap.add_argument("--pub-lag-days", type=int, default=1)
+    ap.add_argument("--var-limit", type=float, default=0.055,
+                    help="live pre-trade gate: max monthly 95%% VaR (positive loss) of the sized book")
+    ap.add_argument("--es-limit", type=float, default=0.075, help="max monthly 95%% ES of the sized book")
+    ap.add_argument("--no-risk-gate", action="store_true", help="disable the live VaR/ES pre-trade gate")
     ap.add_argument("--issued-by", default="owner")
     args = ap.parse_args()
+
+    from arc.autonomy.risk_gate import RiskLimits
+    risk_limits = None if args.no_risk_gate else RiskLimits(var_limit=args.var_limit, es_limit=args.es_limit)
 
     state_root = args.state_root or os.path.join(ROOT, "state", "paper")
     chosen = {NAME_BY_CHOICE[args.strategy]} if args.strategy else set(SPECS)
@@ -180,7 +198,7 @@ def main() -> None:
                        forward_start_arg=args.forward_start, issued_by=args.issued_by)
         if built is None:
             raise SystemExit(f"[copilot] cannot operate {name}: instrument absent")
-        p = _advance_and_propose(name, spec, built, args.vol_target)  # ensure the decision exists
+        p = _advance_and_propose(name, spec, built, args.vol_target, risk_limits)  # ensure the decision exists
         if not p.month:
             raise SystemExit(f"[copilot] {name} is still warming up — nothing to decide yet")
         target = args.month or p.month
@@ -210,13 +228,14 @@ def main() -> None:
                        forward_start_arg=args.forward_start, issued_by=args.issued_by)
         if built is None:
             continue
-        p = _advance_and_propose(name, spec, built, args.vol_target)
+        p = _advance_and_propose(name, spec, built, args.vol_target, risk_limits)
         proposals[name] = asdict(p)
         rows.append({"strategy": name, "month": p.month, "suggest": p.action_suggestion,
                      "frozen_pos": p.frozen_position, "proposed": p.proposed_position,
                      "sized": p.sized_exposure, "halted": p.circuit_halted,
                      "fwd_n": p.n_frozen_months, "decided": p.operator_decided,
-                     "warnings": list(p.drift_warnings)})
+                     "var_forecast": p.var_forecast, "gate_binding": p.risk_gate_binding,
+                     "gate_active": p.risk_gate_active, "warnings": list(p.drift_warnings)})
     _print_proposals(rows)
     flagged = [(r["strategy"], w) for r in rows for w in r["warnings"]]
     if flagged:

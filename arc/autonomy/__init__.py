@@ -44,6 +44,12 @@ from arc.autonomy.pool import (
     pooled_forward_returns,
     pooled_verdict,
 )
+from arc.autonomy.risk_gate import (
+    RiskGateState,
+    RiskLimits,
+    portfolio_pretrade_gate,
+    pretrade_leverage_gate,
+)
 from arc.autonomy.signals import build_signal
 from arc.autonomy.spec import (
     FROZEN_HASH,
@@ -66,6 +72,7 @@ __all__ = [
     "tick", "reconcile", "reconcile_operator", "forward_telemetry",
     "MonitorConfig", "CircuitState", "circuit_breaker", "detect_drift", "signal_psi", "promotion_verdict",
     "run_loop", "Proposal",
+    "RiskLimits", "RiskGateState", "pretrade_leverage_gate", "portfolio_pretrade_gate",
     "propose", "decide", "copilot_status", "OperatorProposal",
     "book_trial", "issue_token",
     "build_signal",
