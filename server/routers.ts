@@ -9,10 +9,12 @@ import { getModelChangelog, getModelAlerts, getUnreadAlertCount, markModelAlertR
 import { notifyOwner } from "./_core/notification";
 import { executePipeline, getPipelineStatus, getPipelineHistory, getLatestPipelineRun } from "./pipelineOrchestrator";
 import { checkAllDataSources, getDataSourceHealthStatus } from "./dataSourceHealth";
+import { autonomyRouter } from "./autonomyRouter";
 import { z } from "zod";
 
 export const appRouter = router({
   system: systemRouter,
+  autonomy: autonomyRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
