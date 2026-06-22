@@ -17,6 +17,10 @@ paper, never a promotion. See docs/PHASE5_INTELLIGENCE_2026-06.md.
 from __future__ import annotations
 
 from arc.intelligence.meta_labeling import meta_label_proba, meta_labels
+from arc.intelligence.online_weights import (
+    ewma_performance_weights,
+    rolling_inverse_variance_weights,
+)
 from arc.intelligence.sizing import confidence_scaled_position, inverse_vol_position
 from arc.intelligence.uncertainty import (
     conformal_intervals,
@@ -28,4 +32,5 @@ __all__ = [
     "predictive_vol", "conformal_intervals", "interval_confidence",
     "confidence_scaled_position", "inverse_vol_position",
     "meta_labels", "meta_label_proba",
+    "ewma_performance_weights", "rolling_inverse_variance_weights",
 ]

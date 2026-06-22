@@ -497,6 +497,11 @@ class StateSpaceRStar:
     def __init__(self, window=120):
         self.window = window
         self.rstar_series = None
+        # Filtered posterior variance of the r* state (P[0,0]) per step, and
+        # the final state covariance. Populated by estimate(); used by
+        # credible_intervals() for uncertainty quantification (not a forecast).
+        self.rstar_var_series = None
+        self.last_P = None
 
     def estimate(self, selic, ipca_yoy, ipca_exp, ibc_br,
                  debt_gdp, cds_5y, nfci=None):
@@ -592,6 +597,8 @@ class StateSpaceRStar:
         R = np.diag([sigma_obs_r**2, sigma_obs_y**2])
 
         rstar = pd.Series(index=idx, dtype=float)
+        # Filtered posterior variance of r* (P[0,0]) aligned to the r* index.
+        rstar_var = pd.Series(index=idx, dtype=float)
 
         for i in range(len(idx)):
             t = idx[i]
@@ -600,7 +607,10 @@ class StateSpaceRStar:
             obs = np.array([real_rate.iloc[i], y_gap.iloc[i]])
 
             if np.any(np.isnan(obs)):
+                # No measurement update this step: carry the prior r* and its
+                # current posterior variance (P unchanged).
                 rstar[t] = x[0]
+                rstar_var[t] = P[0, 0]
                 continue
 
             # === Predict ===
@@ -629,10 +639,53 @@ class StateSpaceRStar:
             x[2] = np.clip(x[2], -5.0, 5.0)
 
             rstar[t] = x[0]
+            # Posterior variance of the r* state after this measurement update.
+            rstar_var[t] = P[0, 0]
 
         rstar = rstar.dropna()
         self.rstar_series = rstar
+        # Align the posterior-variance series to the (dropna'd) r* index so the
+        # two are index-consistent for credible_intervals().
+        self.rstar_var_series = rstar_var.reindex(rstar.index)
+        self.last_P = P
         return rstar
+
+    def credible_intervals(self, z=1.96):
+        """
+        Credible intervals for r* from the Kalman filtered posterior variance.
+
+        Uses the per-step filtered posterior variance of the r* state
+        (P[0,0], recorded in rstar_var_series during estimate()) to form a
+        Gaussian credible band: r* ± z·std, std = sqrt(var). This is
+        uncertainty quantification of the filtered estimate, NOT a forecast.
+
+        Parameters
+        ----------
+        z : float
+            Number of standard deviations (default 1.96 ≈ 95% Gaussian band).
+
+        Returns
+        -------
+        pd.DataFrame with columns [rstar, std, lo, hi], aligned to the r*
+        index. Empty DataFrame if estimate() has not been run.
+        """
+        cols = ['rstar', 'std', 'lo', 'hi']
+        if self.rstar_series is None or self.rstar_var_series is None:
+            return pd.DataFrame(columns=cols)
+        if len(self.rstar_series) == 0:
+            return pd.DataFrame(columns=cols)
+
+        rstar = self.rstar_series
+        var = self.rstar_var_series.reindex(rstar.index)
+        # Posterior variance is non-negative by construction; clip defensively
+        # against tiny negative values from floating-point round-off.
+        std = np.sqrt(var.clip(lower=0.0))
+        out = pd.DataFrame(index=rstar.index)
+        out['rstar'] = rstar
+        out['std'] = std
+        out['lo'] = rstar - z * std
+        out['hi'] = rstar + z * std
+        return out[cols]
 
 
 # ============================================================

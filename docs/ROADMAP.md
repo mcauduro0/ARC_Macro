@@ -108,8 +108,17 @@ not an alpha claim. `scripts/measure_intelligence.py` (deflated, leverage-invari
 conformal-width confidence scaling is a **tentative in-sample** gain (deflated DSR 0.549→0.609) to confirm
 on forward paper, not a result. Also fixed `BOP_CURRENT` (SGS 22707 trade balance → **22701** current
 account, IPEADATA+live-value verified).
-- Still open: online/adaptive selection & weights (warm-start, rolling refit) instead of batch; r* credible
-  intervals from the Kalman covariance; confirm the nowcast confidence-sizing hypothesis on forward paper.
+**Second increment done (`docs/PHASE5B_FORWARD_SIZING_RSTAR_2026-06.md`):** (i) **r\* credible intervals** —
+`StateSpaceRStar` now exposes the Kalman filtered posterior variance → `credible_intervals()` (latest r\* 8.69%
+± 0.50, 95% CI [7.72, 9.67]); (ii) **online/adaptive weights** (`arc/intelligence/online_weights.py`, EWMA-Sharpe
++ inverse-variance, causal) — **measured: NO improvement**, EQUAL weight wins (deflated DSR 0.986 vs −0.095/−0.150),
+equal-weight stays baseline; (iii) **nowcast confidence-sizing PRE-REGISTERED** for forward confirmation
+(`arc/autonomy/forward_experiments.py` + `scripts/confirm_sizing_forward.py`) — deterministic rule + criterion
+committed to git, harness reports `NOT READY 0<24` today (nothing judged in-sample, spine untouched); (iv)
+**BOP_CURRENT rebuilt** (re-collected as the current account, SGS 22701) — impact measured: `Z_bop` corr 0.80 but
+21% sign-flips vs the old trade-balance mapping (meaning corrected).
+- Still open: online *feature* selection (deferred); confirm the nowcast confidence-sizing hypothesis when 24
+  forward months accrue (~2028-06).
 
 ### Phase 6 — Portfolio & risk SOTA
 - VaR/ES hard pre-trade gates; DCC-GARCH / factor covariance (forward-looking correlation).
