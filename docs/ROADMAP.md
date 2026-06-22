@@ -117,13 +117,20 @@ equal-weight stays baseline; (iii) **nowcast confidence-sizing PRE-REGISTERED** 
 committed to git, harness reports `NOT READY 0<24` today (nothing judged in-sample, spine untouched); (iv)
 **BOP_CURRENT rebuilt** (re-collected as the current account, SGS 22701) — impact measured: `Z_bop` corr 0.80 but
 21% sign-flips vs the old trade-balance mapping (meaning corrected).
-- Still open: online *feature* selection (deferred); confirm the nowcast confidence-sizing hypothesis when 24
-  forward months accrue (~2028-06).
+- **Online *feature* selection done (`docs/PHASE6_PORTFOLIO_RISK_2026-06.md`):** `arc/intelligence/online_selection.py`
+  (rolling ElasticNet importance + stability selection, causal) — **measured: NO improvement** over BATCH
+  (Δ deflated-IC +0.000; ONLINE churns the set, H1≫H2 non-stationary). BATCH stays baseline.
+- Still open: confirm the nowcast confidence-sizing hypothesis when 24 forward months accrue (~2028-06).
 
-### Phase 6 — Portfolio & risk SOTA
-- VaR/ES hard pre-trade gates; DCC-GARCH / factor covariance (forward-looking correlation).
-- Black-Litterman blend of risk-parity + macro priors (r*, carry, real-rate guidance).
-- Pre-trade liquidity gate (days-to-liquidate under stress); order FSM + paper-fill simulator.
+### Phase 6 — Portfolio & risk SOTA — **DONE (`docs/PHASE6_PORTFOLIO_RISK_2026-06.md`)**
+Built pure, causal, CI-tested (84 tests) + measured: `arc/risk/var_es.py` (VaR/ES + `pretrade_var_gate`),
+`arc/risk/covariance.py` (EWMA + GARCH(1,1) + Engle DCC(1,1), PSD, forward-looking), `arc/portfolio/black_litterman.py`,
+`arc/execution/paper_fill.py` (order FSM + paper-fill sim w/ slippage/liquidity/cost). Honest measurement
+(`scripts/measure_portfolio_risk.py`): **no weighting scheme beats EQUAL on deflated DSR** (best Black-Litterman-EWMA
+lifts Sharpe 0.78→0.94 + cuts maxDD but Δ deflated DSR only +0.006 < 0.05) → risk/portfolio tools are construction
+tooling, not demonstrated edge; EQUAL stays baseline. VaR/ES gate + execution drag (~0.08%/yr @ 2bp) verified.
+- Still open: pre-trade *liquidity*/days-to-liquidate stress gate (the fill sim has the liquidity cap; a stress
+  scenario layer is the natural extension); wiring VaR/ES + cov as live pre-trade gates in the paper loop.
 
 ### Phase 7 — Autonomy, persistence, learning & skills *(the "autonomous self-learning" ask)*
 **7.1–7.4 DONE** (`arc/autonomy/`, `docs/PHASE7_AUTONOMY_SPINE_2026-06.md`): the persistent, honest
@@ -154,14 +161,21 @@ governance/look-ahead workflow caught real bugs — expanding-z recompute leak, 
 - CI-native invariant tests incl. the three-edge registry + fiscal-sleeve equivalence + shared build_signal
   + SGS-recovery routing (211 pytest green); proven end-to-end against the engine (honest 0-holdout today).
 
-**Still deferred (Phase 8 institutional wrap):** Postgres/Temporal/LangGraph; Claude-driven agents (the
-loop is the deterministic skeleton with clean skill seams); model inventory/MLflow.
+**Still deferred (Phase 8 institutional wrap):** see the concrete plan in
+`docs/PHASE8_INSTITUTIONAL_WRAP_PLAN_2026-06.md` (Postgres-backed ledger + bitemporal store; Temporal durable
+workflows wrapping `run_loop`; Claude-driven agents at the existing skill seams; MLflow). Deferred **by design**:
+needs external services (Postgres/Temporal) not provisioned here; the spine already exposes the clean seams so
+it is a backend swap, not a rewrite.
 
-### Phase 8 — Live/paper trading & governance
-Paper-trade the gated book end-to-end; reconcile fills/slippage; single-use holdout token for the one
-honest live test; promotion only through the ledger with human sign-off.
+### Phase 8 — Institutional wrap & live/paper governance *(deferred, planned)*
+`docs/PHASE8_INSTITUTIONAL_WRAP_PLAN_2026-06.md`. Postgres ledger/store (dual-backend parametrized invariant
+tests as the acceptance net); Temporal durable orchestration; Claude agents (propose-only → human-approve)
+that can promote ONLY through the existing gate + single-use forward holdout; MLflow registry. Plumbing +
+autonomy ergonomics — must not manufacture alpha.
 
 ## Immediate next actions
-1. **(done this round)** Fix the interpolation look-ahead (`causal_annual_to_monthly`) + as-of-invariance tests.
-2. Measure the interpolation fix's IC impact (expected small, FX-valuation features) on the next full gate run.
-3. **Start Phase 3** — wire `DataLayer` to `arc.data.as_of` behind a toggle and stand up the as-of-invariance CI gate. This is the highest-leverage move and makes the whole "no leakage" claim structural.
+1. **Accrual is LIVE** — the 3 booked sleeves accrue monthly (Windows Task Scheduler, next run 2026-07-02);
+   re-run `reexamine_fiscal_hard.py` + `confirm_sizing_forward.py` as forward months land toward the ~2028-06 verdict.
+2. **Phases 5–6 complete** (intelligence + portfolio/risk/execution, all measured; baselines not beaten — honest).
+   Optional: wire VaR/ES + covariance as live pre-trade gates in the paper loop; add a liquidity-stress gate.
+3. **Phase 8** when Postgres/Temporal are provisioned — follow the plan doc; keep the invariant suite green.

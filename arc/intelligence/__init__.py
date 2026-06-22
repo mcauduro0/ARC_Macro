@@ -17,6 +17,11 @@ paper, never a promotion. See docs/PHASE5_INTELLIGENCE_2026-06.md.
 from __future__ import annotations
 
 from arc.intelligence.meta_labeling import meta_label_proba, meta_labels
+from arc.intelligence.online_selection import (
+    online_selected_mask,
+    rolling_elasticnet_importance,
+    rolling_stability_selection,
+)
 from arc.intelligence.online_weights import (
     ewma_performance_weights,
     rolling_inverse_variance_weights,
@@ -33,4 +38,5 @@ __all__ = [
     "confidence_scaled_position", "inverse_vol_position",
     "meta_labels", "meta_label_proba",
     "ewma_performance_weights", "rolling_inverse_variance_weights",
+    "rolling_elasticnet_importance", "rolling_stability_selection", "online_selected_mask",
 ]
