@@ -124,6 +124,30 @@ class Realization:
 
 
 @dataclass(frozen=True)
+class OperatorDecision:
+    """A human-in-the-loop operating decision for one month — the co-pilot's durable, immutable record.
+
+    The co-pilot PROPOSES the deterministic position; a human APPROVES it, OVERRIDEs the size, or SKIPs
+    (stays flat). This record is the audit trail AND the source of the ``operator`` realization stream:
+    the human's actual forward track record, kept strictly separate from the scored ``frozen`` holdout
+    (which the human can NEVER touch) and the deterministic ``live`` baseline. ``action`` is one of
+    APPROVE | OVERRIDE | SKIP; ``operator_position`` is the position actually taken (0.0 for SKIP);
+    ``proposed_position`` is what the loop suggested; ``proposal_digest`` binds the decision to the exact
+    proposal the human saw. Immutable per ``(month, strategy_hash)`` — you cannot repaint your own record."""
+
+    month: str
+    strategy_hash: str
+    action: str               # APPROVE | OVERRIDE | SKIP
+    proposed_position: float   # the deterministic position the loop proposed (the live suggestion)
+    operator_position: float   # the position the human actually took (0.0 for SKIP)
+    rationale: str
+    decided_by: str
+    proposal_digest: str
+    run_id: str
+    decided_at: str
+
+
+@dataclass(frozen=True)
 class RunManifest:
     """Provenance per invocation. ``appended`` distinguishes real activity from idempotent no-ops."""
 
@@ -201,6 +225,7 @@ class PaperLedger:
     REALIZATIONS = "realizations.jsonl"
     MANIFESTS = "manifests.jsonl"
     GOVERNANCE = "governance.jsonl"  # bookings + bases + consumed + verdicts
+    OPERATOR = "operator.jsonl"      # human-in-the-loop co-pilot decisions (the operator stream)
 
     def __init__(self, state_dir: str | Path) -> None:
         self.state_dir = Path(state_dir)
@@ -326,6 +351,41 @@ class PaperLedger:
         """The actually-operated stream (breaker may have zeroed positions). Operational only."""
         return self._stream_frame("live")
 
+    def operator_frame(self) -> pd.DataFrame:
+        """The co-pilot's human-in-the-loop operated stream. Realized via ``paper.reconcile_operator``.
+        Strictly separate from ``frozen`` (scored holdout) and ``live`` (deterministic baseline)."""
+        return self._stream_frame("operator")
+
+    # ---- operator decisions (co-pilot, human-in-the-loop) -----------------
+    def append_operator_decision(self, d: OperatorDecision) -> bool:
+        """Idempotent on ``(month, strategy_hash)`` and IMMUTABLE: a *different* choice for an already
+        committed month raises ``RepaintError`` — the human cannot repaint their own forward track
+        record after the fact. An identical re-commit is a no-op (returns False)."""
+        rows = self._filter(self.OPERATOR, "operator_decision")
+        for r in rows:
+            if r["month"] == d.month and r["strategy_hash"] == d.strategy_hash:
+                same = (r["action"] == d.action
+                        and float(r["operator_position"]) == float(d.operator_position)
+                        and float(r["proposed_position"]) == float(d.proposed_position))
+                if not same:
+                    raise RepaintError(
+                        f"operator decision {d.month}/{d.strategy_hash[:8]} already committed with a "
+                        f"different choice; the forward track record is immutable")
+                return False
+        self._append(self.OPERATOR, {"kind": "operator_decision", **asdict(d)})
+        return True
+
+    def operator_decisions(self) -> dict[str, OperatorDecision]:
+        """Map month -> OperatorDecision. Duplicate keys are FATAL (no last-wins repaint)."""
+        rows = self._filter(self.OPERATOR, "operator_decision")
+        out: dict[str, OperatorDecision] = {}
+        for r in rows:
+            key = r["month"]
+            if key in out:
+                raise LedgerIntegrityError(f"duplicate operator decision for month {key} — ledger is corrupt")
+            out[key] = OperatorDecision(**{k: r[k] for k in OperatorDecision.__dataclass_fields__})
+        return out
+
     # ---- manifests --------------------------------------------------------
     def append_manifest(self, m: RunManifest) -> int:
         return self._append(self.MANIFESTS, {"kind": "manifest", **asdict(m)})
@@ -375,8 +435,8 @@ class PaperLedger:
 
 
 __all__ = [
-    "PaperLedger", "Decision", "Realization", "RunManifest", "DeflationBasis", "TrialBooking",
-    "HoldoutConsumedRecord", "VerdictRecord", "record_sha", "SCHEMA_VERSION",
+    "PaperLedger", "Decision", "Realization", "OperatorDecision", "RunManifest", "DeflationBasis",
+    "TrialBooking", "HoldoutConsumedRecord", "VerdictRecord", "record_sha", "SCHEMA_VERSION",
     "LedgerError", "RepaintError", "LedgerIntegrityError", "DataRevisionError",
     "HoldoutConsumedError", "MissingDeflationBasisError", "UnbookedTrialError",
     "LookAheadError", "HoldoutNotReadyError",

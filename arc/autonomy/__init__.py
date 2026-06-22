@@ -11,6 +11,7 @@ positions are written once and never recomputed; the verdict is one-shot, pre-sc
 deterministic-on-read. See ``docs/PHASE7_AUTONOMY_SPINE_2026-06.md``.
 """
 
+from arc.autonomy.copilot import OperatorProposal, copilot_status, decide, propose
 from arc.autonomy.governance import book_trial, issue_token
 from arc.autonomy.ledger import (
     DataRevisionError,
@@ -21,6 +22,7 @@ from arc.autonomy.ledger import (
     LedgerIntegrityError,
     LookAheadError,
     MissingDeflationBasisError,
+    OperatorDecision,
     PaperLedger,
     Realization,
     RepaintError,
@@ -35,25 +37,36 @@ from arc.autonomy.monitor import (
     promotion_verdict,
     signal_psi,
 )
-from arc.autonomy.paper import forward_telemetry, reconcile, tick
+from arc.autonomy.paper import forward_telemetry, reconcile, reconcile_operator, tick
+from arc.autonomy.pool import (
+    book_pool,
+    issue_pool_token,
+    pooled_forward_returns,
+    pooled_verdict,
+)
 from arc.autonomy.signals import build_signal
 from arc.autonomy.spec import (
     FROZEN_HASH,
     FROZEN_SPEC,
     HARD_PB_SPEC,
     NOWCAST_SPEC,
+    POOL_HASH,
+    POOL_SPEC,
     SPECS,
     strategy_hash,
 )
 
 __all__ = [
-    "FROZEN_SPEC", "FROZEN_HASH", "NOWCAST_SPEC", "HARD_PB_SPEC", "SPECS", "strategy_hash",
-    "PaperLedger", "Decision", "Realization", "DeflationBasis",
+    "FROZEN_SPEC", "FROZEN_HASH", "NOWCAST_SPEC", "HARD_PB_SPEC", "POOL_SPEC", "POOL_HASH",
+    "SPECS", "strategy_hash",
+    "pooled_forward_returns", "book_pool", "issue_pool_token", "pooled_verdict",
+    "PaperLedger", "Decision", "Realization", "OperatorDecision", "DeflationBasis",
     "RepaintError", "LedgerIntegrityError", "DataRevisionError", "HoldoutConsumedError",
     "MissingDeflationBasisError", "UnbookedTrialError", "LookAheadError", "HoldoutNotReadyError",
-    "tick", "reconcile", "forward_telemetry",
+    "tick", "reconcile", "reconcile_operator", "forward_telemetry",
     "MonitorConfig", "CircuitState", "circuit_breaker", "detect_drift", "signal_psi", "promotion_verdict",
     "run_loop", "Proposal",
+    "propose", "decide", "copilot_status", "OperatorProposal",
     "book_trial", "issue_token",
     "build_signal",
 ]

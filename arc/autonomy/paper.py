@@ -194,6 +194,54 @@ def reconcile(
     return out
 
 
+# ----------------------------------------------------------------- reconcile (operator / co-pilot stream)
+def reconcile_operator(
+    asof,
+    realized_returns: pd.Series,
+    ledger: PaperLedger,
+    *,
+    spec: dict = FROZEN_SPEC,
+    run_id: str = "reconcile-op",
+    settlement_lag: pd.Timedelta = pd.Timedelta(0),
+) -> list[Realization]:
+    """Append ``operator`` realizations for human-decided months whose return is FINAL (co-pilot).
+
+    Mirrors ``reconcile`` but realizes the human's committed ``OperatorDecision`` position — NOT the
+    deterministic decision position. Turnover uses the prior month's operator position (0.0 if none —
+    you start flat, so the first operated month legitimately pays its entry cost). Idempotent per
+    ``(month, "operator")``. The ``frozen`` (scored holdout) and ``live`` streams are NEVER touched here:
+    the human overlay is purely additive and can never corrupt the verdict's input."""
+    r = pd.Series(realized_returns).dropna()
+    r.index = [month_end(i) for i in r.index]
+    decs = ledger.decisions()
+    ops = ledger.operator_decisions()
+    done = ledger.realizations("operator")
+    out: list[Realization] = []
+
+    for month_iso in sorted(ops):
+        if month_iso in done:
+            continue  # already reconciled (idempotent)
+        if month_iso not in decs:
+            continue  # no deterministic decision for this month (co-pilot always advances the loop first)
+        m = pd.Timestamp(month_iso)
+        if m not in r.index:
+            continue  # return not yet known
+        if (month_end(asof) - month_end(m)) < settlement_lag:
+            continue  # not yet final
+        prev_iso = _iso(prev_month_end(m))
+        prev_held = float(ops[prev_iso].operator_position) if prev_iso in ops else 0.0
+        held = float(ops[month_iso].operator_position)
+        realized = float(r.loc[m])
+        sret = held * realized - turnover_cost(held, prev_held, float(spec["cost_bps"]))
+        rec = Realization(
+            month=month_iso, strategy_hash=ops[month_iso].strategy_hash, stream="operator",
+            held_position=held, prev_held=prev_held, realized_return=realized, sleeve_return=float(sret),
+            realized_knowledge_time=_iso(asof), return_vintage_seq=0, reconciled_at=_iso(asof), run_id=run_id)
+        if ledger.append_realization(rec):
+            out.append(rec)
+    return out
+
+
 # ----------------------------------------------------------------- telemetry (token-free, NO scores)
 @dataclass(frozen=True)
 class ForwardTelemetry:

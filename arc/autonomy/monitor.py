@@ -155,12 +155,16 @@ def promotion_verdict(ledger: PaperLedger, token, *, asof, spec: dict = FROZEN_S
     s = sharpe_stats(fz["sleeve_return"].values, n_trials=basis.n_trials, sr_std=basis.sr_std)
     dsr, sr_ann = s["dsr"], s["sr_annual"]
 
-    # 7. NaN-fatal criterion.
-    ok_dsr = (dsr == dsr) and dsr >= basis.dsr_min          # (x == x) is False for NaN
-    ok_sr = (sr_ann == sr_ann) and sr_ann > 0
-    passed = bool(ok_dsr and ok_sr)
-    if not (dsr == dsr) or not (sr_ann == sr_ann):
-        reason = "FAIL: degenerate forward sample (NaN DSR/Sharpe)"
+    # 7. Degenerate-fatal criterion: a NaN OR a near-zero-variance forward stream (which yields an absurd,
+    #    non-finite Sharpe from numerical noise) FAILS. A "too perfect" forward stream is a red flag, not a
+    #    pass. (x == x) is False for NaN.
+    sd = float(np.std(fz["sleeve_return"].values, ddof=1)) if n > 1 else 0.0
+    degenerate = (dsr != dsr) or (sr_ann != sr_ann) or (not np.isfinite(sr_ann)) or (sd <= 1e-9)
+    ok_dsr = (dsr == dsr) and dsr >= basis.dsr_min
+    ok_sr = (sr_ann == sr_ann) and np.isfinite(sr_ann) and sr_ann > 0
+    passed = bool(ok_dsr and ok_sr and not degenerate)
+    if degenerate:
+        reason = "FAIL: degenerate forward sample (near-zero variance or NaN DSR/Sharpe)"
     elif passed:
         reason = f"PASS: forward DSR {dsr:.3f} >= {basis.dsr_min} and Sharpe {sr_ann:.2f} > 0 over {n} months"
     else:
