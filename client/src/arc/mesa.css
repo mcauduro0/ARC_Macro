@@ -1,0 +1,91 @@
+/* ARC Macro 2.0 — "Mesa" identity: a trading-desk / terminal aesthetic. Near-black, monospace numerics,
+   one sharp accent, zero decoration, NOT-READY surfaced starkly. Scoped under .arc-mesa so it never
+   fights the legacy theme. */
+
+.arc-mesa {
+  --bg: #08090a;
+  --panel: #0e0f12;
+  --panel-2: #121419;
+  --line: #1c1e24;
+  --line-2: #2a2d36;
+  --dim: #6b7079;
+  --txt: #c9ccd2;
+  --bright: #f3f4f6;
+  --amber: #f5a524; /* primary accent — accrual / not-ready / focus */
+  --green: #34d399; /* operate / long / positive */
+  --red: #f87171;   /* halt / short / negative */
+  --blue: #60a5fa;  /* info */
+
+  background: var(--bg);
+  color: var(--txt);
+  font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-feature-settings: "tnum" 1, "cv01" 1;
+  letter-spacing: 0.01em;
+}
+
+.arc-mesa ::selection { background: rgba(245, 165, 36, 0.25); }
+
+.mesa-label {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--dim);
+}
+.mesa-h { color: var(--bright); }
+.mesa-num { font-variant-numeric: tabular-nums; }
+.mesa-amber { color: var(--amber); }
+.mesa-pos { color: var(--green); }
+.mesa-neg { color: var(--red); }
+.mesa-dim { color: var(--dim); }
+
+.mesa-panel { background: var(--panel); border: 1px solid var(--line); }
+.mesa-divider { border-color: var(--line); }
+.mesa-row { border-bottom: 1px solid var(--line); }
+.mesa-row:last-child { border-bottom: 0; }
+.mesa-rowhover:hover { background: var(--panel-2); }
+
+/* accrual progress bar — terminal block fill */
+.mesa-bar { height: 7px; background: var(--line); position: relative; overflow: hidden; }
+.mesa-bar > span { display: block; height: 100%; background: var(--amber); transition: width 0.3s ease; }
+.mesa-bar.zero > span { background: var(--line-2); }
+
+/* status dots */
+.mesa-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.mesa-dot.live { background: var(--green); box-shadow: 0 0 7px rgba(52, 211, 153, 0.7); }
+.mesa-dot.halt { background: var(--red); box-shadow: 0 0 7px rgba(248, 113, 113, 0.6); }
+.mesa-dot.warn { background: var(--amber); }
+.mesa-dot.idle { background: var(--line-2); }
+
+/* status tags */
+.mesa-tag {
+  font-size: 10px; padding: 1px 6px; border: 1px solid var(--line-2);
+  text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap;
+}
+.mesa-tag.operate { color: var(--green); border-color: rgba(52, 211, 153, 0.4); }
+.mesa-tag.halt { color: var(--red); border-color: rgba(248, 113, 113, 0.4); }
+.mesa-tag.warmup { color: var(--dim); }
+.mesa-tag.accruing { color: var(--amber); border-color: rgba(245, 165, 36, 0.4); }
+.mesa-tag.ready { color: var(--green); border-color: rgba(52, 211, 153, 0.4); }
+.mesa-tag.spent { color: var(--blue); border-color: rgba(96, 165, 250, 0.4); }
+.mesa-tag.unbooked { color: var(--dim); }
+.mesa-tag.overshot { color: var(--red); border-color: rgba(248, 113, 113, 0.4); }
+
+/* the honesty banner — stark, not hidden */
+.mesa-banner {
+  border: 1px solid rgba(245, 165, 36, 0.35);
+  background: rgba(245, 165, 36, 0.06);
+  color: var(--amber);
+}
+
+/* nav */
+.mesa-navlink {
+  display: block; padding: 7px 16px; font-size: 12px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: 0.06em; border-left: 2px solid transparent;
+  cursor: pointer; text-decoration: none;
+}
+.mesa-navlink:hover { color: var(--txt); background: var(--panel); }
+.mesa-navlink.active { color: var(--bright); border-left-color: var(--amber); background: var(--panel); }
+
+.mesa-link { color: var(--amber); text-decoration: none; }
+.mesa-link:hover { text-decoration: underline; }
