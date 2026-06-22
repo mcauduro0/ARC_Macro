@@ -116,6 +116,57 @@ export interface WebState {
   macro: unknown | null;
 }
 
+// ---------------------------------------------------------------------------
+// Raw immutable ledger records — mirror arc/autonomy/ledger.py dataclasses exactly.
+// Served by GET /api/autonomy/ledger/{strategy} for the Ledger/Audit + Research screens.
+// ---------------------------------------------------------------------------
+export interface LedgerDecision {
+  month: string;
+  strategy_hash: string;
+  frozen_position: number;
+  live_position: number;
+  signal: number;
+  signal_z: number;
+  data_max_knowledge_time: string;
+  input_digest: string;
+  run_id: string;
+  created_at: string;
+}
+
+export interface LedgerRealization {
+  month: string;
+  strategy_hash: string;
+  stream: string; // frozen | live | operator
+  held_position: number;
+  prev_held: number;
+  realized_return: number;
+  sleeve_return: number;
+  realized_knowledge_time: string;
+  return_vintage_seq: number;
+  reconciled_at: string;
+  run_id: string;
+}
+
+export interface LedgerOperatorDecision {
+  month: string;
+  strategy_hash: string;
+  action: string; // APPROVE | OVERRIDE | SKIP
+  proposed_position: number;
+  operator_position: number;
+  rationale: string;
+  decided_by: string;
+  proposal_digest: string;
+  run_id: string;
+  decided_at: string;
+}
+
+export interface LedgerResponse {
+  strategy: string;
+  decisions: LedgerDecision[];
+  realizations: { frozen: LedgerRealization[]; live: LedgerRealization[]; operator: LedgerRealization[] };
+  operator_decisions: LedgerOperatorDecision[];
+}
+
 export type DecideAction = "APPROVE" | "OVERRIDE" | "SKIP";
 
 export interface DecideInput {

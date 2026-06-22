@@ -17,3 +17,11 @@ export function useDecide() {
     },
   });
 }
+
+/** Raw immutable ledger records for one sleeve (decisions / realizations / operator decisions). */
+export function useLedger(strategy: string) {
+  return trpc.autonomy.ledger.useQuery(
+    { strategy },
+    { staleTime: 30_000, retry: 1, enabled: Boolean(strategy) },
+  );
+}

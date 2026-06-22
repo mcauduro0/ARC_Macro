@@ -16,13 +16,19 @@ function HeadCell({ children, w }: { children: ReactNode; w?: number }) {
 function SleeveRow({ s }: { s: Sleeve }) {
   const p = s.proposal;
   const at = actionTag(p?.action_suggestion);
+  const awaiting = Boolean(p && p.month && !p.operator_decided);
   return (
     <tr className="mesa-row mesa-rowhover">
       <td style={{ padding: "9px 10px" }}>
         <div className="mesa-h">{s.name}</div>
         <div className="mesa-label">{s.instrument_label}</div>
       </td>
-      <td style={{ padding: "9px 10px" }}><Tag kind={at.kind}>{at.label}</Tag></td>
+      <td style={{ padding: "9px 10px" }}>
+        <div className="flex items-center" style={{ gap: 6 }}>
+          <Tag kind={at.kind}>{at.label}</Tag>
+          {awaiting && <span className="mesa-tag accruing" title="awaiting your decision">● decide</span>}
+        </div>
+      </td>
       <td style={{ padding: "9px 10px", textAlign: "right" }}>
         <Pos value={p?.proposed_position} />
       </td>
@@ -61,6 +67,26 @@ function PoolRow({ pool }: { pool: Pool }) {
   );
 }
 
+function StatStrip({ sleeves }: { sleeves: Sleeve[] }) {
+  const props = sleeves.map((s) => s.proposal).filter((p): p is NonNullable<typeof p> => Boolean(p));
+  const operating = props.filter((p) => p.action_suggestion === "OPERATE").length;
+  const halted = props.filter((p) => p.action_suggestion === "HALT" || p.circuit_halted).length;
+  const warmup = props.length - operating - halted;
+  const gatesActive = props.filter((p) => p.risk_gate_active).length;
+  const operatorDecisions = sleeves.reduce((a, s) => a + s.n_operator_decisions, 0);
+  const awaiting = props.filter((p) => p.month && !p.operator_decided).length;
+  return (
+    <div className="flex" style={{ gap: 22, flexWrap: "wrap" }}>
+      <Meta label="operating" value={String(operating)} />
+      <Meta label="halted" value={String(halted)} />
+      <Meta label="warmup" value={String(warmup)} />
+      <Meta label="gates active" value={`${gatesActive}/${sleeves.length}`} />
+      <Meta label="operator decisions" value={String(operatorDecisions)} />
+      <Meta label="awaiting decision" value={awaiting > 0 ? `${awaiting} →` : "0"} />
+    </div>
+  );
+}
+
 function CommandView({ data }: { data: WebState }) {
   const { meta, sleeves, pool } = data;
   return (
@@ -82,6 +108,9 @@ function CommandView({ data }: { data: WebState }) {
         <Meta label="as of" value={meta.as_of} />
         <Meta label="proposals" value={meta.has_proposals ? "fresh" : "stale (run dump)"} />
       </div>
+
+      {/* operational summary */}
+      <StatStrip sleeves={sleeves} />
 
       {/* forward paper */}
       <section className="mesa-panel">
