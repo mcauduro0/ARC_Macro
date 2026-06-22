@@ -100,6 +100,56 @@ export interface Pool {
   rationale: string;
 }
 
+// ---------------------------------------------------------------------------
+// Macro engine context — produced by scripts/dump_web_state.py `_extract_macro`.
+// HONESTY: every field is null unless the engine genuinely populated it; `notes` records what was omitted
+// and why (never a fabricated value). The regime model is explicitly fit (initialize() leaves it unfit);
+// the unfit 1/3 placeholder is refused. All point-in-time / causal engine output.
+// ---------------------------------------------------------------------------
+export interface MacroRStar {
+  latest: number;
+  unit: string;
+  history: [string, number][]; // [date, value]
+}
+
+export interface MacroRegimeSnapshot {
+  date: string;
+  probs: Record<string, number>;
+}
+
+export interface MacroRegime {
+  latest: Record<string, number>; // e.g. P_carry / P_riskoff / P_stress / P_domestic_calm / P_domestic_stress
+  labels: string[];
+  history: MacroRegimeSnapshot[];
+}
+
+export interface MacroStateVar {
+  key: string;   // e.g. Z_fiscal
+  label: string; // e.g. "fiscal stress"
+  value: number; // z-score (≈ centered at 0)
+}
+
+export interface MacroFxFair {
+  fair: number;
+  spot: number | null;
+  misalignment_pct: number | null; // (spot/fair - 1)*100; negative = BRL stronger than fair (overvalued)
+}
+
+export interface MacroCurvePoint {
+  tenor: string; // 3M / 1Y / 5Y / 10Y …
+  rate: number;  // % p.a.
+}
+
+export interface MacroContext {
+  as_of: string | null;
+  rstar: MacroRStar | null;
+  regime: MacroRegime | null;
+  state_vars: MacroStateVar[] | null;
+  fx_fair: MacroFxFair | null;
+  di_curve: MacroCurvePoint[] | null;
+  notes: string[];
+}
+
 export interface WebStateMeta {
   as_of: string | null;
   dumped_at: string | null;
@@ -113,7 +163,7 @@ export interface WebState {
   meta: WebStateMeta;
   sleeves: Sleeve[];
   pool: Pool;
-  macro: unknown | null;
+  macro: MacroContext | null;
 }
 
 // ---------------------------------------------------------------------------
