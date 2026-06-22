@@ -3,7 +3,7 @@
 // the CLI does. The FastAPI base URL is ARC_API_URL (default http://localhost:8787).
 
 import { z } from "zod";
-import type { DecideInput, WebState } from "@shared/autonomy";
+import type { DecideInput, LedgerResponse, WebState } from "@shared/autonomy";
 import { publicProcedure, router } from "./_core/trpc";
 
 export const ARC_API_BASE = process.env.ARC_API_URL ?? "http://localhost:8787";
@@ -52,7 +52,7 @@ export const autonomyRouter = router({
   /** Raw immutable ledger records for one sleeve. */
   ledger: publicProcedure
     .input(z.object({ strategy: z.string() }))
-    .query(({ input }) => arcApiGet<Record<string, unknown>>(`/api/autonomy/ledger/${input.strategy}`)),
+    .query(({ input }) => arcApiGet<LedgerResponse>(`/api/autonomy/ledger/${input.strategy}`)),
 
   /** Record a co-pilot operator decision (immutable; touches only the operator stream). */
   decide: publicProcedure.input(decideSchema).mutation(({ input }) => arcApiDecide(input)),
