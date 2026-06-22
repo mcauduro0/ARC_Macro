@@ -82,3 +82,28 @@ def strategy_hash(spec: dict[str, Any]) -> str:
 
 
 FROZEN_HASH = strategy_hash(FROZEN_SPEC)
+
+
+def _member_hashes() -> list[str]:
+    """The three booked single-sleeve hashes, sorted — the immutable membership of the pool. Built from
+    the live specs so that editing ANY member spec forks the pool hash too (a re-tuned member can never
+    silently ride inside an already-booked pool)."""
+    return sorted(strategy_hash(s) for s in (FROZEN_SPEC, NOWCAST_SPEC, HARD_PB_SPEC))
+
+
+# The fourth booked candidate (Phase 7.4 / track-a): an EQUAL-WEIGHT POOL of the three single sleeves.
+# Rationale (scripts/measure_statistical_power.py, 2026-06): the three sleeves are nearly independent
+# (avg |corr| 0.11, K_eff 2.92 of 3), so an equal-weight pooled forward holdout carries the same t-content
+# in ~24/K_eff calendar months -- its pre-committed eval_at_n is max(12, ceil(24/K_eff)) = 12, a verdict
+# ~1y SOONER than a single sleeve. This is NOT a claim of edge: pooling pays off ONLY if several sleeves
+# carry real, similarly-signed edge (if one is noise, pooling dilutes). The forward holdout is the sole
+# judge; equal weights are FIXED (no in-sample tuning => no extra weight-deflation). The pool is bound to
+# its members' hashes, so it forks if any member spec changes. cost_bps=0: the pooled stream inherits each
+# member sleeve's own transaction costs; pooling adds no separately-modelled cost here.
+POOL_SPEC: dict[str, Any] = {
+    "kind": "pool",
+    "members": _member_hashes(),
+    "weights": "equal",
+    "cost_bps": 0.0,
+}
+POOL_HASH = strategy_hash(POOL_SPEC)

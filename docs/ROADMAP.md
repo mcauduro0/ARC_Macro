@@ -173,9 +173,25 @@ tests as the acceptance net); Temporal durable orchestration; Claude agents (pro
 that can promote ONLY through the existing gate + single-use forward holdout; MLflow registry. Plumbing +
 autonomy ergonomics — must not manufacture alpha.
 
+### Phase 7.4 — co-pilot (human-in-the-loop) + statistical-power audit & pooled holdout *(done)*
+`docs/PHASE7_4_COPILOT_AND_POWER_2026-06.md`. **(b) Co-pilot:** a third `operator` stream
+(`arc/autonomy/copilot.py`, `scripts/copilot.py`) — the loop PROPOSES, the human APPROVES/OVERRIDEs/SKIPs
+(immutable `OperatorDecision`), feeding a durable forward track record — while the scored `frozen` holdout
+stays **byte-identical** (CI-proven). Revision-robust (catches the anti-repaint `DataRevisionError`, never
+repaints); verified on the engine (proposes momentum -0.61, nowcast +0.25 for 2026-07). **(a) Power:**
+`scripts/measure_statistical_power.py` — the 3 sleeves are nearly independent (avg|corr| 0.11, **K_eff 2.92**),
+so a pre-registered equal-weight **pooled forward holdout** (`POOL_SPEC`, `arc/autonomy/pool.py`,
+`scripts/pre_register_pool.py`) reaches a verdict at **eval_at_n=12** common forward months — **~1 year sooner**
+than a single sleeve — IF several sleeves carry real edge (booked `bfe8ee59`, blocked 0<12 today). Honest
+nulls: more in-sample/macro history does NOT accelerate the forward verdict; the DI_5Y 2010–2012 gap is
+backtest-quality only (documented, NOT patched with synthetic data). Verdicts hardened to FAIL degenerate
+(near-zero-variance) forward streams. 22 new tests, 387 green.
+
 ## Immediate next actions
-1. **Accrual is LIVE** — the 3 booked sleeves accrue monthly (Windows Task Scheduler, next run 2026-07-02);
-   re-run `reexamine_fiscal_hard.py` + `confirm_sizing_forward.py` as forward months land toward the ~2028-06 verdict.
+1. **Accrual is LIVE** — the 3 sleeves accrue monthly (Task Scheduler, next run 2026-07-02). The owner can now
+   operate as a **co-pilot**: `python scripts/copilot.py --propose` then `--decide`. As forward months land:
+   re-run `reexamine_fiscal_hard.py` + `confirm_sizing_forward.py`; the **pooled** holdout can verdict at 12
+   common months (~2027-07, ~1y before the singles).
 2. **Phases 5–6 complete** (intelligence + portfolio/risk/execution, all measured; baselines not beaten — honest).
    Optional: wire VaR/ES + covariance as live pre-trade gates in the paper loop; add a liquidity-stress gate.
 3. **Phase 8** when Postgres/Temporal are provisioned — follow the plan doc; keep the invariant suite green.
