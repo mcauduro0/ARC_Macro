@@ -1,20 +1,32 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
-import ArcApp from "./arc/ArcApp";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Portfolio from "./pages/Portfolio";
+import ArcApp from "./arc/ArcApp";
 
 function Router() {
-  // ARC Macro 2.0 full pivot: the autonomy-first console is the app. The legacy v4.6 dashboard stays
-  // reachable at /legacy during the migration; /portfolio is preserved.
   return (
     <Switch>
-      <Route path={"/legacy"} component={Home} />
-      <Route path={"/portfolio"} component={Portfolio} />
-      <Route component={ArcApp} />
+      {/* ARC 2.0 Mesa routes (primary) */}
+      <Route path="/" component={ArcApp} />
+      <Route path="/co-pilot" component={ArcApp} />
+      <Route path="/holdout" component={ArcApp} />
+      <Route path="/risk" component={ArcApp} />
+      <Route path="/macro" component={ArcApp} />
+      <Route path="/research" component={ArcApp} />
+      <Route path="/ledger" component={ArcApp} />
+      <Route path="/report" component={ArcApp} />
+
+      {/* Legacy v4.6 dashboard (accessible at /legacy) */}
+      <Route path="/legacy" component={Home} />
+      <Route path="/portfolio" component={Portfolio} />
+
+      <Route path="/404" component={NotFound} />
+      <Route component={NotFound} />
     </Switch>
   );
 }

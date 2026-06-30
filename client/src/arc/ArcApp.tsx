@@ -10,6 +10,7 @@ import { Risk } from "./pages/Risk";
 import { Research } from "./pages/Research";
 import { Ledger } from "./pages/Ledger";
 import { Macro } from "./pages/Macro";
+import { Report } from "./pages/Report";
 import { Placeholder } from "./pages/Placeholder";
 import { useAutonomyState } from "./useAutonomy";
 
@@ -25,6 +26,7 @@ export default function ArcApp() {
         <Route path="/macro" component={Macro} />
         <Route path="/research" component={Research} />
         <Route path="/ledger" component={Ledger} />
+        <Route path="/report" component={Report} />
         <Route>{() => <Placeholder area="Not found" note="No such area." />}</Route>
       </Switch>
     </Shell>

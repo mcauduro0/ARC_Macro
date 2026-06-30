@@ -11,6 +11,7 @@ const NAV: { href: string; label: string }[] = [
   { href: "/macro", label: "Macro" },
   { href: "/research", label: "Research" },
   { href: "/ledger", label: "Ledger" },
+  { href: "/report", label: "Report" },
 ];
 
 export function Shell({ asOf, children }: { asOf?: string | null; children: ReactNode }) {

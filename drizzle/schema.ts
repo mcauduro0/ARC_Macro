@@ -343,7 +343,7 @@ export type InsertModelAlert = typeof modelAlerts.$inferInsert;
  */
 export const pipelineRuns = mysqlTable("pipeline_runs", {
   id: int("id").autoincrement().primaryKey(),
-  triggerType: mysqlEnum("triggerType", ["manual", "scheduled", "startup"]).notNull(),
+  triggerType: mysqlEnum("triggerType", ["manual", "scheduled", "startup", "webhook"]).notNull(),
   triggeredBy: varchar("triggeredBy", { length: 100 }), // user name or 'system'
   status: mysqlEnum("status", ["running", "completed", "failed", "partial"]).default("running").notNull(),
   // Step tracking
@@ -394,3 +394,30 @@ export const dataSourceHealth = mysqlTable("data_source_health", {
 
 export type DataSourceHealth = typeof dataSourceHealth.$inferSelect;
 export type InsertDataSourceHealth = typeof dataSourceHealth.$inferInsert;
+
+// ============================================================
+// ARC 2.0 Operator Decisions
+// ============================================================
+
+/**
+ * Operator decisions — immutable per (strategy, month, hash).
+ * Records APPROVE / SKIP / OVERRIDE actions from the Co-Pilot page.
+ * Once a decision is committed for a given (strategy, month), it cannot be changed.
+ */
+export const operatorDecisions = mysqlTable("operator_decisions", {
+  id: int("id").autoincrement().primaryKey(),
+  strategy: varchar("strategy", { length: 50 }).notNull(), // e.g. momentum_front, nowcast_long, fiscal_hard
+  month: varchar("month", { length: 7 }).notNull(), // YYYY-MM
+  strategyHash: varchar("strategy_hash", { length: 64 }).notNull(), // sleeve hash at decision time
+  action: mysqlEnum("action", ["APPROVE", "SKIP", "OVERRIDE"]).notNull(),
+  proposedPosition: double("proposed_position").notNull(), // what the live stream proposed
+  operatorPosition: double("operator_position").notNull(), // what the operator chose (=proposed for APPROVE, 0 for SKIP, custom for OVERRIDE)
+  rationale: text("rationale"), // optional free-text
+  decidedBy: varchar("decided_by", { length: 100 }).notNull().default("owner"),
+  proposalDigest: varchar("proposal_digest", { length: 128 }), // links to the proposal that was decided on
+  // Immutability: unique constraint on (strategy, month) enforced at application level
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type OperatorDecision = typeof operatorDecisions.$inferSelect;
+export type InsertOperatorDecision = typeof operatorDecisions.$inferInsert;
